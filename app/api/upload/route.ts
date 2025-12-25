@@ -28,8 +28,13 @@ import { UploadRequest, UploadResponse, SupportedMimeType } from '@/lib/types';
 export async function POST(request: NextRequest) {
   console.log('📤 Document upload request received');
   
-  // Skip processing during build time
-  if (process.env.NODE_ENV === 'production' && !process.env.VERCEL_ENV) {
+  // Enhanced build-time detection
+  const isBuildTime = typeof window === 'undefined' && 
+                     process.env.NODE_ENV === 'production' && 
+                     !process.env.VERCEL_ENV && 
+                     !process.env.RUNTIME_ENV;
+  
+  if (isBuildTime) {
     return NextResponse.json(
       { error: 'Upload not available during build', code: 'BUILD_TIME' },
       { status: 503 }

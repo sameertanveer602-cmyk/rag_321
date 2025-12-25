@@ -4,13 +4,18 @@
 // =============================================================================
 
 import { ExtractedContent, ExtractionType, SupportedMimeType } from './types';
-import pdfParse from 'pdf-parse';
-import * as mammoth from 'mammoth';
-import { createWorker, PSM } from 'tesseract.js';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { v4 as uuidv4 } from 'uuid';
+
+// Check if we're in build mode
+const isBuildTime = typeof window === 'undefined' && process.env.NODE_ENV === 'production' && !process.env.VERCEL_ENV;
+
+// Module references for dynamic loading
+let pdfParse: any;
+let mammoth: any;
+let tesseract: any;
 
 // Document structure detection interfaces
 interface DocumentStructure {
@@ -45,7 +50,24 @@ let sharp: any = null;
 
 // Initialize optional dependencies
 async function initializeDependencies() {
+  // Skip initialization during build time
+  if (isBuildTime) {
+    console.log('⚠️ Skipping dependency initialization during build time');
+    return;
+  }
+
   try {
+    // Load main modules dynamically
+    if (!pdfParse) {
+      pdfParse = (await import('pdf-parse')).default;
+    }
+    if (!mammoth) {
+      mammoth = await import('mammoth');
+    }
+    if (!tesseract) {
+      tesseract = await import('tesseract.js');
+    }
+    
     if (!pdf2pic) {
       pdf2pic = await import('pdf2pic').then(m => m.default);
     }
@@ -290,20 +312,35 @@ export async function extractContent(
 ): Promise<ExtractedContent[]> {
   console.log(`🔍 Extracting content from ${filename} (${mimeType})`);
   
-  // Skip extraction during build time
-  if (process.env.NODE_ENV === 'production' && !process.env.VERCEL_ENV) {
+  // Skip extraction during build time - return minimal placeholder
+  if (isBuildTime) {
+    console.log('⚠️ Skipping extraction during build time');
     return [{
-      text: 'Build-time placeholder',
+      text: `Placeholder content for ${filename}`,
       type: 'text' as ExtractionType,
       metadata: {
         source_filename: filename,
-        extraction_type: 'text' as ExtractionType
+        extraction_type: 'text' as ExtractionType,
+        build_time_placeholder: true
       }
     }];
   }
   
   // Initialize dependencies
-  await initializeDependencies();
+  try {
+    await initializeDependencies();
+  } catch (error) {
+    console.error('Failed to initialize dependencies:', error);
+    return [{
+      text: `Error initializing extractors for ${filename}`,
+      type: 'text' as ExtractionType,
+      metadata: {
+        source_filename: filename,
+        extraction_type: 'text' as ExtractionType,
+        error: 'dependency_initialization_failed'
+      }
+    }];
+  }
   
   const startTime = Date.now();
   let extractedContent: ExtractedContent[] = [];
@@ -508,6 +545,10 @@ async function extractImagesFromPdfPages(buffer: Buffer, filename: string, tempD
       console.log(`🔍 Running OCR on page ${pageNumber}...`);
       
       try {
+        if (!tesseract) {
+          throw new Error('Tesseract not available');
+        }
+        const { createWorker, PSM } = tesseract;
         const worker = await createWorker('eng');
         await worker.setParameters({
           tessedit_pageseg_mode: PSM.AUTO, // Automatic page segmentation
@@ -582,6 +623,10 @@ async function extractEmbeddedImagesFromPdf(buffer: Buffer, filename: string, te
         try {
           const imageBuffer = fs.readFileSync(imagePath);
           
+          if (!tesseract) {
+            throw new Error('Tesseract not available');
+          }
+          const { createWorker } = tesseract;
           const worker = await createWorker('eng');
           const { data: { text, confidence } } = await worker.recognize(imageBuffer);
           await worker.terminate();
@@ -623,6 +668,11 @@ async function extractDocxFileAdvanced(buffer: Buffer, filename: string): Promis
   let fullText = '';
   
   try {
+    // Check if mammoth is available
+    if (!mammoth) {
+      throw new Error('Mammoth not available');
+    }
+    
     // Step 1: Extract text content
     const textResult = await mammoth.extractRawText({ buffer });
     fullText = textResult.value;
@@ -705,6 +755,10 @@ async function extractImagesFromDocxZip(buffer: Buffer, filename: string): Promi
       console.log(`🔍 Running OCR on DOCX image ${i + 1}: ${imageFile.name}`);
       
       try {
+        if (!tesseract) {
+          throw new Error('Tesseract not available');
+        }
+        const { createWorker, PSM } = tesseract;
         const worker = await createWorker('eng');
         await worker.setParameters({
           tessedit_pageseg_mode: PSM.AUTO,
@@ -821,6 +875,10 @@ async function extractImagesFromPptxZip(buffer: Buffer, filename: string): Promi
       console.log(`🔍 Running OCR on PPTX image ${i + 1}: ${imageFile.name}`);
       
       try {
+        if (!tesseract) {
+          throw new Error('Tesseract not available');
+        }
+        const { createWorker, PSM } = tesseract;
         const worker = await createWorker('eng');
         await worker.setParameters({
           tessedit_pageseg_mode: PSM.AUTO,
@@ -887,8 +945,12 @@ async function extractImageFileAdvanced(buffer: Buffer, filename: string): Promi
     }
     
     // Initialize Tesseract worker with advanced settings
+    if (!tesseract) {
+      throw new Error('Tesseract not available');
+    }
+    const { createWorker, PSM } = tesseract;
     const worker = await createWorker(['eng'], 1, {
-      logger: m => {
+      logger: (m: any) => {
         if (m.status === 'recognizing text') {
           console.log(`📊 OCR progress: ${(m.progress * 100).toFixed(1)}%`);
         }
