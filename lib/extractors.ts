@@ -4,7 +4,7 @@
 // =============================================================================
 
 import { ExtractedContent, ExtractionType, SupportedMimeType } from './types';
-import * as pdfParse from 'pdf-parse';
+import pdfParse from 'pdf-parse';
 import * as mammoth from 'mammoth';
 import { createWorker } from 'tesseract.js';
 import * as fs from 'fs';
