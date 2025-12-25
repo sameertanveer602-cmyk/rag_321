@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "description": "A production-ready multilingual RAG system with Next.js, Supabase, and Google Gemini AI",
   "private": true,
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "keywords": [
     "rag",
     "multilingual",

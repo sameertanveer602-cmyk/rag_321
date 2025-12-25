@@ -121,13 +121,13 @@ export default function Home() {
         body: JSON.stringify(uploadRequest)
       });
 
-      const result = await response.json();
-
       if (response.ok) {
+        const result = await response.json();
         setUploadResult(result);
         setUploadProgress('Upload completed successfully!');
       } else {
-        throw new Error(result.error || 'Upload failed');
+        const errorResult = await response.json();
+        throw new Error(errorResult.error || 'Upload failed');
       }
     } catch (error) {
       setUploadProgress(`Upload failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
@@ -155,12 +155,12 @@ export default function Home() {
         body: JSON.stringify(searchRequest)
       });
 
-      const result = await response.json();
-
       if (response.ok) {
+        const result = await response.json();
         setSearchResult(result);
       } else {
-        throw new Error(result.error || 'Search failed');
+        const errorResult = await response.json();
+        throw new Error(errorResult.error || 'Search failed');
       }
     } catch (error) {
       setSearchResult({
@@ -198,9 +198,8 @@ export default function Home() {
         body: JSON.stringify(chatRequest)
       });
 
-      const result: ChatResponse = await response.json();
-
       if (response.ok) {
+        const result: ChatResponse = await response.json();
         setSessionId(result.session_id);
         
         const assistantMessage: ChatMessage = {
@@ -212,7 +211,8 @@ export default function Home() {
 
         setChatMessages(prev => [...prev, assistantMessage]);
       } else {
-        throw new Error(result.error || 'Chat failed');
+        const errorResult = await response.json();
+        throw new Error(errorResult.error || 'Chat failed');
       }
     } catch (error) {
       const errorMessage: ChatMessage = {
