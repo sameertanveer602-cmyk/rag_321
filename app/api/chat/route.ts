@@ -7,7 +7,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { v4 as uuidv4 } from 'uuid';
 import { supabaseAdmin } from '@/lib/supabase';
 import { similaritySearch, generateChatResponse } from '@/lib/langchain';
-import { ChatRequest, ChatResponse, ChatMessage, RetrievedChunk } from '@/lib/types';
+import { ChatRequest, ChatResponse, ChatMessage } from '@/lib/types';
 
 /**
  * Chat / Session API Endpoint
@@ -141,11 +141,13 @@ export async function POST(request: NextRequest) {
       answer = "I couldn't find relevant information in the uploaded documents to answer your question. Please ensure relevant documents are uploaded or try rephrasing your question with different keywords.";
     } else {
       console.log('🤖 Generating chat response with RAG context and history...');
-      // Pass chat history for context-aware responses
-      const historyForLLM = chatHistory.map(msg => ({
-        role: msg.role,
-        content: msg.content
-      }));
+      // Pass chat history for context-aware responses (filter out system messages)
+      const historyForLLM = chatHistory
+        .filter(msg => msg.role === 'user' || msg.role === 'assistant')
+        .map(msg => ({
+          role: msg.role as 'user' | 'assistant',
+          content: msg.content
+        }));
       answer = await generateChatResponse(message.trim(), relevantChunks, historyForLLM);
       console.log(`✅ Generated chat response (${answer.length} characters)`);
     }
