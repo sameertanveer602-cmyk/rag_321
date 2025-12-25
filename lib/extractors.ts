@@ -6,7 +6,7 @@
 import { ExtractedContent, ExtractionType, SupportedMimeType } from './types';
 import pdfParse from 'pdf-parse';
 import * as mammoth from 'mammoth';
-import { createWorker } from 'tesseract.js';
+import { createWorker, PSM } from 'tesseract.js';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
@@ -59,7 +59,7 @@ async function initializeDependencies() {
       sharp = await import('sharp').then(m => m.default);
     }
   } catch (error) {
-    console.warn('⚠️  Some advanced extraction dependencies not available:', error.message);
+    console.warn('⚠️  Some advanced extraction dependencies not available:', error instanceof Error ? error.message : String(error));
   }
 }
 
@@ -498,7 +498,7 @@ async function extractImagesFromPdfPages(buffer: Buffer, filename: string, tempD
       try {
         const worker = await createWorker('eng');
         await worker.setParameters({
-          tessedit_pageseg_mode: '1', // Automatic page segmentation
+          tessedit_pageseg_mode: PSM.AUTO, // Automatic page segmentation
           preserve_interword_spaces: '1',
         });
         
@@ -673,7 +673,7 @@ async function extractImagesFromDocxZip(buffer: Buffer, filename: string): Promi
     // Find image files in the DOCX structure
     const imageFiles: { name: string; data: Buffer }[] = [];
     
-    zipContent.forEach((relativePath, file) => {
+    zipContent.forEach((relativePath: string, file: any) => {
       if (relativePath.startsWith('word/media/') && 
           /\.(png|jpg|jpeg|gif|bmp|tiff)$/i.test(relativePath)) {
         imageFiles.push({
@@ -695,7 +695,7 @@ async function extractImagesFromDocxZip(buffer: Buffer, filename: string): Promi
       try {
         const worker = await createWorker('eng');
         await worker.setParameters({
-          tessedit_pageseg_mode: '1',
+          tessedit_pageseg_mode: PSM.AUTO,
           preserve_interword_spaces: '1',
         });
         
@@ -789,7 +789,7 @@ async function extractImagesFromPptxZip(buffer: Buffer, filename: string): Promi
     // Find image files in the PPTX structure
     const imageFiles: { name: string; data: Buffer }[] = [];
     
-    zipContent.forEach((relativePath, file) => {
+    zipContent.forEach((relativePath: string, file: any) => {
       if (relativePath.startsWith('ppt/media/') && 
           /\.(png|jpg|jpeg|gif|bmp|tiff)$/i.test(relativePath)) {
         imageFiles.push({
@@ -811,7 +811,7 @@ async function extractImagesFromPptxZip(buffer: Buffer, filename: string): Promi
       try {
         const worker = await createWorker('eng');
         await worker.setParameters({
-          tessedit_pageseg_mode: '1',
+          tessedit_pageseg_mode: PSM.AUTO,
           preserve_interword_spaces: '1',
         });
         
@@ -886,7 +886,7 @@ async function extractImageFileAdvanced(buffer: Buffer, filename: string): Promi
     // Configure Tesseract for maximum accuracy
     await worker.setParameters({
       tessedit_char_whitelist: '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz .,!?@#$%^&*()_+-=[]{}|;:\'\"<>?/~`',
-      tessedit_pageseg_mode: '1', // Automatic page segmentation with OSD
+      tessedit_pageseg_mode: PSM.AUTO, // Automatic page segmentation with OSD
       preserve_interword_spaces: '1',
       tessedit_do_invert: '0',
     });
