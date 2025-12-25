@@ -80,6 +80,14 @@ export interface ChatResponse {
 // INTERNAL PROCESSING TYPES
 // =============================================================================
 
+export interface SupabaseSearchResult {
+  id: string;
+  doc_id: string;
+  content: string;
+  similarity: number;
+  metadata: Record<string, any>;
+}
+
 export type ExtractionType = 'text' | 'table' | 'json' | 'image_ocr' | 'graph_ocr';
 
 export interface ExtractedContent {

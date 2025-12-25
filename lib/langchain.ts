@@ -9,7 +9,7 @@ import { RecursiveCharacterTextSplitter } from '@langchain/textsplitters';
 import { SupabaseVectorStore } from '@langchain/community/vectorstores/supabase';
 import { Document } from '@langchain/core/documents';
 import { supabaseAdmin } from './supabase';
-import { ExtractedContent, ProcessedChunk, RetrievedChunk, ExtractionType } from './types';
+import { ExtractedContent, ProcessedChunk, RetrievedChunk, SupabaseSearchResult } from './types';
 
 // =============================================================================
 // LANGCHAIN COMPONENT INITIALIZATION
@@ -367,7 +367,7 @@ export async function similaritySearch(
       console.log(`✅ Found ${fallbackResults?.length || 0} results via fallback`);
       
       // Return fallback results with fake similarity scores
-      return (fallbackResults || []).map((result, index) => ({
+      return (fallbackResults || []).map((result: any, index: number) => ({
         chunk_id: result.id,
         doc_id: result.doc_id,
         text: result.content,
@@ -379,7 +379,7 @@ export async function similaritySearch(
     console.log(`✅ Found ${results?.length || 0} results via RPC`);
     
     // Convert to RetrievedChunk format
-    const retrievedChunks: RetrievedChunk[] = (results || []).map(result => ({
+    const retrievedChunks: RetrievedChunk[] = (results || []).map((result: SupabaseSearchResult) => ({
       chunk_id: result.id,
       doc_id: result.doc_id,
       text: result.content,
