@@ -290,6 +290,18 @@ export async function extractContent(
 ): Promise<ExtractedContent[]> {
   console.log(`🔍 Extracting content from ${filename} (${mimeType})`);
   
+  // Skip extraction during build time
+  if (process.env.NODE_ENV === 'production' && !process.env.VERCEL_ENV) {
+    return [{
+      text: 'Build-time placeholder',
+      type: 'text' as ExtractionType,
+      metadata: {
+        source_filename: filename,
+        extraction_type: 'text' as ExtractionType
+      }
+    }];
+  }
+  
   // Initialize dependencies
   await initializeDependencies();
   

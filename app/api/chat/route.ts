@@ -36,6 +36,14 @@ import { ChatRequest, ChatResponse, ChatMessage } from '@/lib/types';
 export async function POST(request: NextRequest) {
   console.log('💬 Chat request received');
   
+  // Skip processing during build time
+  if (process.env.NODE_ENV === 'production' && !process.env.VERCEL_ENV) {
+    return NextResponse.json(
+      { error: 'Chat not available during build', code: 'BUILD_TIME' },
+      { status: 503 }
+    );
+  }
+  
   try {
     // Parse and validate request
     const body: ChatRequest = await request.json();
