@@ -10,36 +10,53 @@ const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-if (!supabaseUrl) {
-  throw new Error('Missing NEXT_PUBLIC_SUPABASE_URL environment variable');
-}
+// Allow build to continue without environment variables
+const isBuildTime = process.env.NODE_ENV === 'production' && !process.env.VERCEL_ENV;
 
-if (!supabaseAnonKey) {
-  throw new Error('Missing NEXT_PUBLIC_SUPABASE_ANON_KEY environment variable');
-}
+if (!isBuildTime) {
+  if (!supabaseUrl) {
+    throw new Error('Missing NEXT_PUBLIC_SUPABASE_URL environment variable');
+  }
 
-if (!supabaseServiceKey) {
-  throw new Error('Missing SUPABASE_SERVICE_ROLE_KEY environment variable');
+  if (!supabaseAnonKey) {
+    throw new Error('Missing NEXT_PUBLIC_SUPABASE_ANON_KEY environment variable');
+  }
+
+  if (!supabaseServiceKey) {
+    throw new Error('Missing SUPABASE_SERVICE_ROLE_KEY environment variable');
+  }
 }
 
 // =============================================================================
 // CLIENT INSTANCES
 // =============================================================================
 
+// Use fallback values during build time
+const buildTimeUrl = 'https://placeholder.supabase.co';
+const buildTimeKey = 'placeholder-key';
+
 // Public client for client-side operations
-export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
-  auth: {
-    persistSession: false,
-  },
-});
+export const supabase = createClient(
+  supabaseUrl || buildTimeUrl, 
+  supabaseAnonKey || buildTimeKey, 
+  {
+    auth: {
+      persistSession: false,
+    },
+  }
+);
 
 // Admin client for server-side operations with full permissions
-export const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey, {
-  auth: {
-    autoRefreshToken: false,
-    persistSession: false,
-  },
-});
+export const supabaseAdmin = createClient(
+  supabaseUrl || buildTimeUrl, 
+  supabaseServiceKey || buildTimeKey, 
+  {
+    auth: {
+      autoRefreshToken: false,
+      persistSession: false,
+    },
+  }
+);
 
 // =============================================================================
 // UTILITY FUNCTIONS

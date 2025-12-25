@@ -10,6 +10,16 @@ export async function GET() {
   try {
     console.log('🏥 Health check requested');
     
+    // Skip database checks during build time
+    if (process.env.NODE_ENV === 'production' && !process.env.VERCEL_ENV) {
+      return NextResponse.json({
+        status: 'build-time',
+        database: { connected: false },
+        environment: { all_variables_present: false },
+        message: 'Health check skipped during build'
+      });
+    }
+    
     // Test database connection
     const dbConnected = await testConnection();
     
