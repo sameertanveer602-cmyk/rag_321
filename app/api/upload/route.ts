@@ -28,19 +28,6 @@ import { UploadRequest, UploadResponse, SupportedMimeType } from '@/lib/types';
 export async function POST(request: NextRequest) {
   console.log('📤 Document upload request received');
   
-  // Enhanced build-time detection
-  const isBuildTime = typeof window === 'undefined' && 
-                     process.env.NODE_ENV === 'production' && 
-                     !process.env.VERCEL_ENV && 
-                     !process.env.RUNTIME_ENV;
-  
-  if (isBuildTime) {
-    return NextResponse.json(
-      { error: 'Upload not available during build', code: 'BUILD_TIME' },
-      { status: 503 }
-    );
-  }
-  
   try {
     // Parse and validate request
     const body: UploadRequest = await request.json();
@@ -179,14 +166,6 @@ export async function POST(request: NextRequest) {
  */
 export async function PUT(request: NextRequest) {
   console.log('📤 Multipart file upload request received');
-  
-  // Skip processing during build time
-  if (process.env.NODE_ENV === 'production' && !process.env.VERCEL_ENV) {
-    return NextResponse.json(
-      { error: 'Upload not available during build', code: 'BUILD_TIME' },
-      { status: 503 }
-    );
-  }
   
   try {
     const formData = await request.formData();

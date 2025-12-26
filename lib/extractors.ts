@@ -4,18 +4,13 @@
 // =============================================================================
 
 import { ExtractedContent, ExtractionType, SupportedMimeType } from './types';
+import pdfParse from 'pdf-parse';
+import * as mammoth from 'mammoth';
+import { createWorker, PSM } from 'tesseract.js';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { v4 as uuidv4 } from 'uuid';
-
-// Check if we're in build mode
-const isBuildTime = typeof window === 'undefined' && process.env.NODE_ENV === 'production' && !process.env.VERCEL_ENV;
-
-// Module references for dynamic loading
-let pdfParse: any;
-let mammoth: any;
-let tesseract: any;
 
 // Document structure detection interfaces
 interface DocumentStructure {
@@ -50,24 +45,7 @@ let sharp: any = null;
 
 // Initialize optional dependencies
 async function initializeDependencies() {
-  // Skip initialization during build time
-  if (isBuildTime) {
-    console.log('⚠️ Skipping dependency initialization during build time');
-    return;
-  }
-
   try {
-    // Load main modules dynamically
-    if (!pdfParse) {
-      pdfParse = (await import('pdf-parse')).default;
-    }
-    if (!mammoth) {
-      mammoth = await import('mammoth');
-    }
-    if (!tesseract) {
-      tesseract = await import('tesseract.js');
-    }
-    
     if (!pdf2pic) {
       pdf2pic = await import('pdf2pic').then(m => m.default);
     }
@@ -312,35 +290,8 @@ export async function extractContent(
 ): Promise<ExtractedContent[]> {
   console.log(`🔍 Extracting content from ${filename} (${mimeType})`);
   
-  // Skip extraction during build time - return minimal placeholder
-  if (isBuildTime) {
-    console.log('⚠️ Skipping extraction during build time');
-    return [{
-      text: `Placeholder content for ${filename}`,
-      type: 'text' as ExtractionType,
-      metadata: {
-        source_filename: filename,
-        extraction_type: 'text' as ExtractionType,
-        build_time_placeholder: true
-      }
-    }];
-  }
-  
   // Initialize dependencies
-  try {
-    await initializeDependencies();
-  } catch (error) {
-    console.error('Failed to initialize dependencies:', error);
-    return [{
-      text: `Error initializing extractors for ${filename}`,
-      type: 'text' as ExtractionType,
-      metadata: {
-        source_filename: filename,
-        extraction_type: 'text' as ExtractionType,
-        error: 'dependency_initialization_failed'
-      }
-    }];
-  }
+  await initializeDependencies();
   
   const startTime = Date.now();
   let extractedContent: ExtractedContent[] = [];
@@ -545,11 +496,7 @@ async function extractImagesFromPdfPages(buffer: Buffer, filename: string, tempD
       console.log(`🔍 Running OCR on page ${pageNumber}...`);
       
       try {
-        if (!tesseract) {
-          throw new Error('Tesseract not available');
-        }
-        const { createWorker, PSM } = tesseract;
-        const worker = await createWorker('eng');
+        const worker = await createWorker(['eng', 'heb']);
         await worker.setParameters({
           tessedit_pageseg_mode: PSM.AUTO, // Automatic page segmentation
           preserve_interword_spaces: '1',
@@ -623,11 +570,7 @@ async function extractEmbeddedImagesFromPdf(buffer: Buffer, filename: string, te
         try {
           const imageBuffer = fs.readFileSync(imagePath);
           
-          if (!tesseract) {
-            throw new Error('Tesseract not available');
-          }
-          const { createWorker } = tesseract;
-          const worker = await createWorker('eng');
+          const worker = await createWorker(['eng', 'heb']);
           const { data: { text, confidence } } = await worker.recognize(imageBuffer);
           await worker.terminate();
           
@@ -668,11 +611,6 @@ async function extractDocxFileAdvanced(buffer: Buffer, filename: string): Promis
   let fullText = '';
   
   try {
-    // Check if mammoth is available
-    if (!mammoth) {
-      throw new Error('Mammoth not available');
-    }
-    
     // Step 1: Extract text content
     const textResult = await mammoth.extractRawText({ buffer });
     fullText = textResult.value;
@@ -755,11 +693,7 @@ async function extractImagesFromDocxZip(buffer: Buffer, filename: string): Promi
       console.log(`🔍 Running OCR on DOCX image ${i + 1}: ${imageFile.name}`);
       
       try {
-        if (!tesseract) {
-          throw new Error('Tesseract not available');
-        }
-        const { createWorker, PSM } = tesseract;
-        const worker = await createWorker('eng');
+        const worker = await createWorker(['eng', 'heb']);
         await worker.setParameters({
           tessedit_pageseg_mode: PSM.AUTO,
           preserve_interword_spaces: '1',
@@ -875,11 +809,7 @@ async function extractImagesFromPptxZip(buffer: Buffer, filename: string): Promi
       console.log(`🔍 Running OCR on PPTX image ${i + 1}: ${imageFile.name}`);
       
       try {
-        if (!tesseract) {
-          throw new Error('Tesseract not available');
-        }
-        const { createWorker, PSM } = tesseract;
-        const worker = await createWorker('eng');
+        const worker = await createWorker(['eng', 'heb']);
         await worker.setParameters({
           tessedit_pageseg_mode: PSM.AUTO,
           preserve_interword_spaces: '1',
@@ -944,12 +874,8 @@ async function extractImageFileAdvanced(buffer: Buffer, filename: string): Promi
       }
     }
     
-    // Initialize Tesseract worker with advanced settings
-    if (!tesseract) {
-      throw new Error('Tesseract not available');
-    }
-    const { createWorker, PSM } = tesseract;
-    const worker = await createWorker(['eng'], 1, {
+    // Initialize Tesseract worker with multilingual support (English + Hebrew)
+    const worker = await createWorker(['eng', 'heb'], 1, {
       logger: (m: any) => {
         if (m.status === 'recognizing text') {
           console.log(`📊 OCR progress: ${(m.progress * 100).toFixed(1)}%`);
@@ -957,16 +883,26 @@ async function extractImageFileAdvanced(buffer: Buffer, filename: string): Promi
       }
     });
     
-    // Configure Tesseract for maximum accuracy
+    // Configure Tesseract for maximum accuracy with multilingual support
     await worker.setParameters({
-      tessedit_char_whitelist: '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz .,!?@#$%^&*()_+-=[]{}|;:\'\"<>?/~`',
+      // Remove character whitelist to support Hebrew and other scripts
       tessedit_pageseg_mode: PSM.AUTO, // Automatic page segmentation with OSD
       preserve_interword_spaces: '1',
       tessedit_do_invert: '0',
+      // Enable better table detection
+      tessedit_create_hocr: '1',
+      tessedit_create_tsv: '1'
     });
     
     const { data: { text, confidence, words } } = await worker.recognize(processedBuffer);
     await worker.terminate();
+    
+    // Detect Hebrew content
+    const hasHebrew = /[\u05D0-\u05EA]/.test(text);
+    const hasNumbers = /\d/.test(text);
+    const hasTables = /[\u05D0-\u05EA].*\d|\d.*[\u05D0-\u05EA]|[₪$€£¥]/.test(text);
+    
+    console.log(`📊 OCR Results: confidence=${confidence.toFixed(1)}%, Hebrew=${hasHebrew}, Tables=${hasTables}`);
     
     if (text.trim()) {
       // Extract main OCR text
@@ -1077,6 +1013,7 @@ function flattenJsonToLines(obj: any, prefix = ''): string[] {
 function extractTablesFromHtml(html: string): string[] {
   const tables: string[] = [];
   
+  // Enhanced regex to capture tables with various attributes including RTL
   const tableRegex = /<table[^>]*>(.*?)<\/table>/gis;
   let match;
   
@@ -1093,20 +1030,34 @@ function extractTablesFromHtml(html: string): string[] {
 
 function convertHtmlTableToText(tableHtml: string): string {
   let text = tableHtml
+    // Handle table rows
     .replace(/<tr[^>]*>/gi, '\n')
     .replace(/<\/tr>/gi, '')
+    // Handle table cells with better spacing for RTL content
     .replace(/<td[^>]*>/gi, '\t')
     .replace(/<\/td>/gi, '')
     .replace(/<th[^>]*>/gi, '\t')
     .replace(/<\/th>/gi, '')
+    // Remove all other HTML tags
     .replace(/<[^>]*>/g, '')
+    // Handle HTML entities including Hebrew-specific ones
     .replace(/&nbsp;/g, ' ')
     .replace(/&amp;/g, '&')
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    // Handle Hebrew HTML entities
+    .replace(/&#(\d+);/g, (match, num) => String.fromCharCode(parseInt(num)))
+    .replace(/&#x([0-9a-fA-F]+);/g, (match, hex) => String.fromCharCode(parseInt(hex, 16)))
     .trim();
   
+  // Clean up extra whitespace while preserving Hebrew text structure
   text = text.replace(/\n\s*\n/g, '\n').replace(/\t+/g, '\t');
+  
+  // Ensure proper spacing for mixed Hebrew-English content
+  text = text.replace(/([a-zA-Z])([א-ת])/g, '$1 $2');
+  text = text.replace(/([א-ת])([a-zA-Z])/g, '$1 $2');
   
   return text;
 }
@@ -1121,11 +1072,34 @@ function extractTablesFromPdfText(text: string): string[] {
   for (const line of lines) {
     const trimmedLine = line.trim();
     
-    const hasMultipleColumns = /\s{3,}/.test(trimmedLine) && trimmedLine.split(/\s{3,}/).length >= 3;
-    const hasTabSeparators = trimmedLine.includes('\t') && trimmedLine.split('\t').length >= 3;
-    const hasPipeSeparators = trimmedLine.includes('|') && trimmedLine.split('|').length >= 3;
+    // Enhanced table detection for Hebrew and multilingual content
+    const hasMultipleColumns = /\s{2,}/.test(trimmedLine) && trimmedLine.split(/\s{2,}/).length >= 2;
+    const hasTabSeparators = trimmedLine.includes('\t') && trimmedLine.split('\t').length >= 2;
+    const hasPipeSeparators = trimmedLine.includes('|') && trimmedLine.split('|').length >= 2;
     
-    if (hasMultipleColumns || hasTabSeparators || hasPipeSeparators) {
+    // Hebrew-specific table patterns
+    const hasHebrewNumbers = /[\u05D0-\u05EA].*\d|\d.*[\u05D0-\u05EA]/.test(trimmedLine);
+    const hasCurrency = /[₪$€£¥]/.test(trimmedLine);
+    const hasHebrewTableWords = /[\u05D0-\u05EA].*(סכום|מחיר|כמות|תאריך|שם|מספר|סה״כ|סהכ|ח״מ|חמ|ת״ז|תז|קוד|רשימה|פירוט|תיאור)/.test(trimmedLine);
+    
+    // Mixed content patterns (Hebrew + English/Numbers)
+    const hasMixedContent = /[\u05D0-\u05EA].*[a-zA-Z0-9]|[a-zA-Z0-9].*[\u05D0-\u05EA]/.test(trimmedLine);
+    
+    // Date and percentage patterns
+    const hasDatePatterns = /\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4}|\d{1,2}\s+(ינו|פבר|מרץ|אפר|מאי|יונ|יול|אוג|ספט|אוק|נוב|דצמ)/.test(trimmedLine);
+    const hasPercentages = /\d+%|אחוז/.test(trimmedLine);
+    
+    // Enhanced Hebrew table structure detection
+    const hasHebrewStructure = /[\u05D0-\u05EA]+\s+\d+|\d+\s+[\u05D0-\u05EA]+/.test(trimmedLine);
+    const hasMultipleHebrewWords = (trimmedLine.match(/[\u05D0-\u05EA]+/g) || []).length >= 2;
+    
+    // Check for table-like structure
+    const isTableLike = hasMultipleColumns || hasTabSeparators || hasPipeSeparators || 
+                       (hasMixedContent && (hasHebrewNumbers || hasCurrency || hasHebrewTableWords)) ||
+                       hasDatePatterns || hasPercentages || hasHebrewStructure ||
+                       (hasMultipleHebrewWords && (hasNumbers(trimmedLine) || hasCurrency));
+    
+    if (isTableLike) {
       if (!inTable) {
         inTable = true;
         currentTable = [];
@@ -1133,27 +1107,63 @@ function extractTablesFromPdfText(text: string): string[] {
       currentTable.push(trimmedLine);
     } else {
       if (inTable && currentTable.length >= 2) {
-        tables.push(currentTable.join('\n'));
+        // Clean and format the table text for Hebrew content
+        const tableText = currentTable.join('\n');
+        const cleanedTable = cleanHebrewTableText(tableText);
+        tables.push(cleanedTable);
       }
       inTable = false;
       currentTable = [];
     }
   }
   
+  // Handle table at end of text
   if (inTable && currentTable.length >= 2) {
-    tables.push(currentTable.join('\n'));
+    const tableText = currentTable.join('\n');
+    const cleanedTable = cleanHebrewTableText(tableText);
+    tables.push(cleanedTable);
   }
   
   return tables;
+}
+
+// Helper function to check if text contains numbers
+function hasNumbers(text: string): boolean {
+  return /\d/.test(text);
+}
+
+// Helper function to clean Hebrew table text
+function cleanHebrewTableText(text: string): string {
+  return text
+    // Normalize whitespace
+    .replace(/\s+/g, ' ')
+    // Ensure proper spacing around Hebrew text
+    .replace(/([a-zA-Z0-9])([א-ת])/g, '$1 $2')
+    .replace(/([א-ת])([a-zA-Z0-9])/g, '$1 $2')
+    // Clean up currency symbols
+    .replace(/(\d)\s*([₪$€£¥])/g, '$1$2')
+    .replace(/([₪$€£¥])\s*(\d)/g, '$1$2')
+    // Fix Hebrew punctuation spacing
+    .replace(/([א-ת])\s*([״׳])/g, '$1$2')
+    .replace(/([״׳])\s*([א-ת])/g, '$1$2')
+    // Clean up Hebrew abbreviations
+    .replace(/ח\s*״\s*מ/g, 'ח״מ')
+    .replace(/ת\s*״\s*ז/g, 'ת״ז')
+    .replace(/סה\s*״\s*כ/g, 'סה״כ')
+    // Normalize Hebrew date formats
+    .replace(/(\d{1,2})\s*[\/\-\.]\s*(\d{1,2})\s*[\/\-\.]\s*(\d{2,4})/g, '$1/$2/$3')
+    .trim();
 }
 
 function extractTablesFromOcrText(text: string, words: any[]): Array<{text: string, confidence: number}> {
   const tables: Array<{text: string, confidence: number}> = [];
   
   try {
+    // Enhanced table detection for multilingual content including Hebrew
     const lineGroups: { [key: number]: any[] } = {};
-    const tolerance = 10;
+    const tolerance = 15; // Increased tolerance for better line grouping
     
+    // Group words by vertical position (y-coordinate)
     words.forEach(word => {
       if (word.bbox && word.text.trim()) {
         const y = Math.round(word.bbox.y0 / tolerance) * tolerance;
@@ -1171,8 +1181,11 @@ function extractTablesFromOcrText(text: string, words: any[]): Array<{text: stri
     let inTable = false;
     
     for (const line of sortedLines) {
+      // Sort words by x-coordinate (handles both LTR and RTL)
       const sortedWords = line.sort((a, b) => a.bbox.x0 - b.bbox.x0);
-      const isTableRow = sortedWords.length >= 3 && hasRegularSpacing(sortedWords);
+      
+      // Enhanced table row detection for multilingual content
+      const isTableRow = isLikelyTableRow(sortedWords);
       
       if (isTableRow) {
         if (!inTable) {
@@ -1197,6 +1210,7 @@ function extractTablesFromOcrText(text: string, words: any[]): Array<{text: stri
       }
     }
     
+    // Handle table at end of document
     if (inTable && tableLines.length >= 2) {
       const tableText = convertWordsToTableText(tableLines);
       const avgConfidence = calculateAverageConfidence(tableLines);
@@ -1216,7 +1230,52 @@ function extractTablesFromOcrText(text: string, words: any[]): Array<{text: stri
   return tables;
 }
 
-function hasRegularSpacing(words: any[]): boolean {
+// Enhanced table row detection for multilingual content
+function isLikelyTableRow(words: any[]): boolean {
+  if (words.length < 2) return false;
+  
+  // Check for regular spacing patterns
+  const hasRegularSpacingPattern = words.length >= 3 && checkRegularSpacing(words);
+  
+  // Check for numeric content (common in tables)
+  const hasNumbers = words.some(word => /\d/.test(word.text));
+  
+  // Check for common table separators or patterns
+  const hasSeparators = words.some(word => /[|│┃┆┇┊┋]/.test(word.text));
+  
+  // Check for aligned content (similar x-positions across rows)
+  const hasAlignment = words.length >= 2;
+  
+  // Hebrew/RTL specific patterns
+  const hasHebrewNumbers = words.some(word => /[\u05D0-\u05EA].*\d|\d.*[\u05D0-\u05EA]/.test(word.text));
+  
+  // Currency symbols common in Hebrew tables
+  const hasCurrency = words.some(word => /[₪$€£¥]/.test(word.text));
+  
+  // Hebrew table keywords
+  const hasHebrewTableKeywords = words.some(word => 
+    /סכום|מחיר|כמות|תאריך|שם|מספר|סה״כ|סהכ|ח״מ|חמ|ת״ז|תז|קוד|רשימה|פירוט|תיאור/.test(word.text)
+  );
+  
+  // Date patterns (Hebrew and international)
+  const hasDatePatterns = words.some(word => 
+    /\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4}|\d{1,2}\s+(ינו|פבר|מרץ|אפר|מאי|יונ|יול|אוג|ספט|אוק|נוב|דצמ)/.test(word.text)
+  );
+  
+  // Percentage patterns
+  const hasPercentages = words.some(word => /\d+%|אחוז/.test(word.text));
+  
+  return hasRegularSpacingPattern || 
+         (hasNumbers && hasAlignment) || 
+         hasSeparators || 
+         hasHebrewNumbers || 
+         hasCurrency || 
+         hasHebrewTableKeywords ||
+         hasDatePatterns ||
+         hasPercentages;
+}
+
+function checkRegularSpacing(words: any[]): boolean {
   if (words.length < 3) return false;
   
   const gaps = [];

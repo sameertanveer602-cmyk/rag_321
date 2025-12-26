@@ -28,7 +28,9 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "type-check": "tsc --noEmit"
+    "type-check": "tsc --noEmit",
+    "clear-db": "node clear-database.js",
+    "clear-db-force": "node clear-database-simple.js"
   },
   "dependencies": {
     "@langchain/community": "^0.3.15",

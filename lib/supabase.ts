@@ -10,53 +10,36 @@ const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-// Allow build to continue without environment variables
-const isBuildTime = process.env.NODE_ENV === 'production' && !process.env.VERCEL_ENV;
+if (!supabaseUrl) {
+  throw new Error('Missing NEXT_PUBLIC_SUPABASE_URL environment variable');
+}
 
-if (!isBuildTime) {
-  if (!supabaseUrl) {
-    throw new Error('Missing NEXT_PUBLIC_SUPABASE_URL environment variable');
-  }
+if (!supabaseAnonKey) {
+  throw new Error('Missing NEXT_PUBLIC_SUPABASE_ANON_KEY environment variable');
+}
 
-  if (!supabaseAnonKey) {
-    throw new Error('Missing NEXT_PUBLIC_SUPABASE_ANON_KEY environment variable');
-  }
-
-  if (!supabaseServiceKey) {
-    throw new Error('Missing SUPABASE_SERVICE_ROLE_KEY environment variable');
-  }
+if (!supabaseServiceKey) {
+  throw new Error('Missing SUPABASE_SERVICE_ROLE_KEY environment variable');
 }
 
 // =============================================================================
 // CLIENT INSTANCES
 // =============================================================================
 
-// Use fallback values during build time
-const buildTimeUrl = 'https://placeholder.supabase.co';
-const buildTimeKey = 'placeholder-key';
-
 // Public client for client-side operations
-export const supabase = createClient(
-  supabaseUrl || buildTimeUrl, 
-  supabaseAnonKey || buildTimeKey, 
-  {
-    auth: {
-      persistSession: false,
-    },
-  }
-);
+export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+  auth: {
+    persistSession: false,
+  },
+});
 
 // Admin client for server-side operations with full permissions
-export const supabaseAdmin = createClient(
-  supabaseUrl || buildTimeUrl, 
-  supabaseServiceKey || buildTimeKey, 
-  {
-    auth: {
-      autoRefreshToken: false,
-      persistSession: false,
-    },
-  }
-);
+export const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey, {
+  auth: {
+    autoRefreshToken: false,
+    persistSession: false,
+  },
+});
 
 // =============================================================================
 // UTILITY FUNCTIONS
@@ -128,7 +111,29 @@ export async function uploadFile(
   mimeType: string
 ): Promise<string> {
   try {
+    console.log(`📤 Uploading file: ${filename} (${mimeType}, ${fileBuffer.length} bytes)`);
+    
     const filePath = `${Date.now()}-${filename}`;
+    
+    // Test connection first
+    console.log('🔗 Testing Supabase connection...');
+    const { data: buckets, error: bucketsError } = await supabaseAdmin.storage.listBuckets();
+    
+    if (bucketsError) {
+      console.error('❌ Failed to list buckets:', bucketsError);
+      throw new Error(`Storage connection failed: ${bucketsError.message}`);
+    }
+    
+    console.log('✅ Supabase connection successful, buckets:', buckets?.map(b => b.name));
+    
+    // Check if documents bucket exists
+    const documentsBucket = buckets?.find(b => b.name === 'documents');
+    if (!documentsBucket) {
+      console.error('❌ Documents bucket not found. Available buckets:', buckets?.map(b => b.name));
+      throw new Error('Documents storage bucket not found. Please create it in Supabase.');
+    }
+    
+    console.log('📁 Documents bucket found, uploading file...');
     
     const { data, error } = await supabaseAdmin.storage
       .from('documents')
@@ -138,12 +143,14 @@ export async function uploadFile(
       });
     
     if (error) {
+      console.error('❌ Storage upload error:', error);
       throw new Error(`Storage upload failed: ${error.message}`);
     }
     
+    console.log('✅ File uploaded successfully:', data.path);
     return data.path;
   } catch (error) {
-    console.error('File upload failed:', error);
+    console.error('❌ File upload failed:', error);
     throw error;
   }
 }

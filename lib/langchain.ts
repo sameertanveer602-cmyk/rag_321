@@ -509,13 +509,19 @@ export async function generateChatResponse(
   
   console.log(`🌐 Detected primary language: ${primaryLanguage}${isMultilingual ? ' (multilingual content)' : ''}`);
   
+  // Check if query is asking about tables
+  const isTableQuery = /table|טבלה|נתונים|מחירים|רשימה|סכום|מספרים|תוצאות|דוח|סטטיסטיקה/i.test(query);
+  const hasTableContent = retrievedChunks.some(chunk => chunk.metadata?.extraction_type === 'table');
+  
+  console.log(`📊 Table query detected: ${isTableQuery}, Has table content: ${hasTableContent}`);
+  
   // Build conversation history
   const historyText = chatHistory
     .slice(-6) // Keep last 6 messages for context
     .map(msg => `${msg.role === 'user' ? 'Human' : 'Assistant'}: ${msg.content}`)
     .join('\n');
   
-  // Build context from retrieved chunks with structure information
+  // Build context from retrieved chunks with enhanced table formatting
   const context = retrievedChunks
     .map((chunk, index) => {
       const metadata = chunk.metadata || {};
@@ -532,6 +538,13 @@ export async function generateChatResponse(
       
       sourceInfo += ` | Relevance: ${(chunk.score * 100).toFixed(1)}%`;
       
+      // Add content type information
+      if (metadata.extraction_type === 'table') {
+        sourceInfo += ` | TYPE: TABLE DATA`;
+      } else if (metadata.extraction_type === 'image_ocr') {
+        sourceInfo += ` | TYPE: OCR FROM IMAGE`;
+      }
+      
       // Add structure context to the chunk text
       let structuredText = chunk.text;
       if (metadata.chapter || metadata.section) {
@@ -541,12 +554,17 @@ export async function generateChatResponse(
         structuredText = `[${structurePrefix.join(' | ')}]\n${chunk.text}`;
       }
       
+      // Enhanced table formatting for Hebrew content
+      if (metadata.extraction_type === 'table') {
+        structuredText = formatTableForDisplay(structuredText, primaryLanguage);
+      }
+      
       return `[${sourceInfo}]\n${structuredText}\n`;
     })
     .join('\n---\n\n');
   
-  // Get language-specific instructions
-  const languageInstructions = getLanguageInstructions(primaryLanguage, isMultilingual);
+  // Get language-specific instructions with enhanced table handling
+  const languageInstructions = getLanguageInstructions(primaryLanguage, isMultilingual, isTableQuery, hasTableContent);
   
   // Construct chat prompt with history and structure awareness
   const prompt = `You are a helpful AI assistant in a conversation. Use the retrieved sources to answer questions accurately.
@@ -561,6 +579,17 @@ GENERAL INSTRUCTIONS:
 - Use natural language for citations like "According to Chapter X, Section Y..." or "As mentioned in the [Chapter Name] section..."
 - Consider the conversation history for context
 - Organize information by document structure when helpful
+
+${isTableQuery || hasTableContent ? `
+TABLE FORMATTING INSTRUCTIONS:
+- When presenting table data, preserve the original table structure and formatting
+- For Hebrew tables, maintain right-to-left text direction where appropriate
+- Use clear column separators (|) and row breaks for table display
+- Include Hebrew currency symbols (₪) and numbers as they appear in the source
+- When translating table headers, provide both Hebrew and English when helpful
+- Preserve numerical data exactly as it appears in the source
+- If table data is incomplete or unclear, mention this limitation
+` : ''}
 
 ${historyText ? `CONVERSATION HISTORY:\n${historyText}\n\n` : ''}RETRIEVED SOURCES:
 ${context}
@@ -644,9 +673,76 @@ function detectContentLanguages(chunks: RetrievedChunk[]): {
 }
 
 /**
+ * Format table content for better display, especially for Hebrew content
+ */
+function formatTableForDisplay(tableText: string, primaryLanguage: string): string {
+  if (!tableText || !tableText.trim()) return tableText;
+  
+  // Split into lines and process each line
+  const lines = tableText.split('\n').map(line => line.trim()).filter(line => line);
+  
+  if (lines.length === 0) return tableText;
+  
+  // Detect if this looks like a table (has multiple columns)
+  const hasTabSeparators = lines.some(line => line.includes('\t'));
+  const hasMultipleSpaces = lines.some(line => /\s{2,}/.test(line));
+  const hasPipeSeparators = lines.some(line => line.includes('|'));
+  
+  if (!hasTabSeparators && !hasMultipleSpaces && !hasPipeSeparators) {
+    return tableText; // Not a table, return as-is
+  }
+  
+  // Process table formatting
+  const formattedLines = lines.map(line => {
+    // Handle different separator types
+    let columns: string[];
+    
+    if (hasPipeSeparators) {
+      columns = line.split('|').map(col => col.trim()).filter(col => col);
+    } else if (hasTabSeparators) {
+      columns = line.split('\t').map(col => col.trim()).filter(col => col);
+    } else {
+      // Split on multiple spaces
+      columns = line.split(/\s{2,}/).map(col => col.trim()).filter(col => col);
+    }
+    
+    // For Hebrew content, ensure proper spacing and currency formatting
+    if (primaryLanguage === 'hebrew') {
+      columns = columns.map(col => {
+        // Fix Hebrew currency formatting
+        col = col.replace(/(\d)\s*₪/g, '$1₪');
+        col = col.replace(/₪\s*(\d)/g, '₪$1');
+        
+        // Ensure proper spacing around Hebrew text
+        col = col.replace(/([a-zA-Z0-9])([א-ת])/g, '$1 $2');
+        col = col.replace(/([א-ת])([a-zA-Z0-9])/g, '$1 $2');
+        
+        return col.trim();
+      });
+    }
+    
+    // Join columns with consistent separator
+    return '| ' + columns.join(' | ') + ' |';
+  });
+  
+  // Add table header separator for better formatting
+  if (formattedLines.length > 1) {
+    const headerSeparator = '|' + formattedLines[0].split('|').slice(1, -1).map(() => '---').join('|') + '|';
+    formattedLines.splice(1, 0, headerSeparator);
+  }
+  
+  return formattedLines.join('\n');
+}
+
+/**
  * Get language-specific instructions for the LLM
  */
-function getLanguageInstructions(primaryLanguage: string, isMultilingual: boolean): string {
+function getLanguageInstructions(
+  primaryLanguage: string, 
+  isMultilingual: boolean, 
+  isTableQuery: boolean = false, 
+  hasTableContent: boolean = false
+): string {
   const languageMap: Record<string, string> = {
     hebrew: 'Hebrew (עברית)',
     arabic: 'Arabic (العربية)',
@@ -661,19 +757,41 @@ function getLanguageInstructions(primaryLanguage: string, isMultilingual: boolea
   
   const primaryLangName = languageMap[primaryLanguage] || primaryLanguage;
   
+  let instructions = '';
+  
   if (isMultilingual) {
-    return `- The sources contain content in multiple languages, with ${primaryLangName} being primary
+    instructions = `- The sources contain content in multiple languages, with ${primaryLangName} being primary
 - RESPOND in the same language as the user's question when possible
 - If the user asks in English but sources are in ${primaryLangName}, provide the answer in English but include original text citations
 - If the user asks in ${primaryLangName}, respond in ${primaryLangName}
 - Always preserve the original language of direct quotes and citations
 - When translating concepts, provide both the original term and translation when helpful`;
   } else {
-    return `- The sources are primarily in ${primaryLangName}
+    instructions = `- The sources are primarily in ${primaryLangName}
 - RESPOND in the same language as the user's question
 - If the user asks in English but sources are in ${primaryLangName}, provide a helpful English response based on the ${primaryLangName} content
 - If the user asks in ${primaryLangName}, respond in ${primaryLangName}
 - Always preserve the original language of direct quotes and citations
 - Do not say "no information found" if you have relevant content in ${primaryLangName} - use and translate it appropriately`;
   }
+  
+  // Add Hebrew-specific table instructions
+  if ((isTableQuery || hasTableContent) && primaryLanguage === 'hebrew') {
+    instructions += `
+
+HEBREW TABLE SPECIFIC INSTRUCTIONS:
+- When presenting Hebrew table data, maintain the original Hebrew text and numbers
+- Preserve Hebrew currency symbols (₪) and their positioning
+- Keep Hebrew column headers in Hebrew with English translations in parentheses when helpful
+- Maintain right-to-left text flow for Hebrew content within tables
+- Use clear table formatting with | separators between columns
+- Present numerical data exactly as it appears in the Hebrew source
+- When explaining table content, use Hebrew terms for financial/business concepts when they appear in the source
+- Example table format:
+  | שם המוצר (Product Name) | מחיר (Price) | כמות (Quantity) |
+  |------------------------|-------------|----------------|
+  | מוצר א                  | 100₪       | 5              |`;
+  }
+  
+  return instructions;
 }
