@@ -41,7 +41,6 @@ interface SectionInfo {
 let pdf2pic: any = null;
 let pdfPoppler: any = null;
 let JSZip: any = null;
-let sharp: any = null;
 
 // Initialize optional dependencies
 async function initializeDependencies() {
@@ -54,9 +53,6 @@ async function initializeDependencies() {
     }
     if (!JSZip) {
       JSZip = await import('jszip').then(m => m.default);
-    }
-    if (!sharp) {
-      sharp = await import('sharp').then(m => m.default);
     }
   } catch (error) {
     console.warn('⚠️  Some advanced extraction dependencies not available:', error instanceof Error ? error.message : String(error));
@@ -856,23 +852,8 @@ async function extractImageFileAdvanced(buffer: Buffer, filename: string): Promi
   try {
     console.log(`🔍 Running advanced OCR on ${filename}...`);
     
-    // Preprocess image with Sharp if available
-    let processedBuffer = buffer;
-    if (sharp) {
-      try {
-        processedBuffer = await sharp(buffer)
-          .resize(2000, 2000, { fit: 'inside', withoutEnlargement: true })
-          .sharpen()
-          .normalize()
-          .png()
-          .toBuffer();
-        
-        console.log(`📸 Image preprocessed with Sharp`);
-      } catch (sharpError) {
-        console.warn('⚠️  Sharp preprocessing failed, using original image');
-        processedBuffer = buffer;
-      }
-    }
+    // Use original buffer directly (no Sharp preprocessing)
+    const processedBuffer = buffer;
     
     // Initialize Tesseract worker with multilingual support (English + Hebrew)
     const worker = await createWorker(['eng', 'heb'], 1, {
