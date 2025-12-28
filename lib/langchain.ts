@@ -148,6 +148,7 @@ export async function chunkContent(
 
 /**
  * Special chunking for table content to preserve structure
+ * Enhanced for Hebrew table support with proper metadata
  */
 async function chunkTableContent(
   tableContent: ExtractedContent,
@@ -155,6 +156,39 @@ async function chunkTableContent(
 ): Promise<ProcessedChunk[]> {
   const chunks: ProcessedChunk[] = [];
   const tableText = tableContent.text;
+  
+  // Detect Hebrew content in table
+  const hasHebrew = /[\u05D0-\u05EA]/.test(tableText);
+  const hasCurrency = /[₪$€£¥]/.test(tableText);
+  const hasHebrewTableKeywords = /סכום|מחיר|כמות|תאריך|שם|מספר|סה״כ|סהכ|ח״מ|חמ|ת״ז|תז|קוד|רשימה|פירוט|תיאור|טבלה|נתונים|דוח|סטטיסטיקה/.test(tableText);
+  
+  console.log(`📊 Processing table chunk: Hebrew=${hasHebrew}, Currency=${hasCurrency}, Keywords=${hasHebrewTableKeywords}`);
+  
+  // For Hebrew tables, always create as separate chunk to ensure proper storage
+  if (hasHebrew || hasHebrewTableKeywords) {
+    console.log('🔤 Creating Hebrew table as separate chunk');
+    
+    // Clean and format Hebrew table text
+    const cleanedTableText = cleanHebrewTableForStorage(tableText);
+    
+    chunks.push({
+      text: cleanedTableText,
+      metadata: {
+        ...tableContent.metadata,
+        chunk_index: 0,
+        total_chunks: 1,
+        is_table_chunk: true,
+        is_hebrew_table: true,
+        has_currency: hasCurrency,
+        has_hebrew_keywords: hasHebrewTableKeywords,
+        table_language: 'hebrew',
+        content_type: 'hebrew_table'
+      }
+    });
+    
+    return chunks;
+  }
+  
   const rows = tableText.split('\n').filter(row => row.trim());
   
   if (rows.length <= 1) {
@@ -166,7 +200,8 @@ async function chunkTableContent(
         metadata: {
           ...tableContent.metadata,
           chunk_index: index,
-          total_chunks: textChunks.length
+          total_chunks: textChunks.length,
+          is_table_chunk: true
         }
       });
     });
@@ -187,7 +222,8 @@ async function chunkTableContent(
         metadata: {
           ...tableContent.metadata,
           chunk_index: chunkIndex++,
-          is_table_chunk: true
+          is_table_chunk: true,
+          table_language: 'english'
         }
       });
       currentChunk = row;
@@ -204,12 +240,41 @@ async function chunkTableContent(
         ...tableContent.metadata,
         chunk_index: chunkIndex,
         is_table_chunk: true,
-        total_chunks: chunkIndex + 1
+        total_chunks: chunkIndex + 1,
+        table_language: 'english'
       }
     });
   }
   
   return chunks;
+}
+
+/**
+ * Clean and format Hebrew table text for proper storage
+ */
+function cleanHebrewTableForStorage(tableText: string): string {
+  return tableText
+    // Normalize whitespace while preserving table structure
+    .replace(/\s+/g, ' ')
+    .replace(/\n\s+/g, '\n')
+    // Ensure proper spacing around Hebrew text and numbers
+    .replace(/([a-zA-Z0-9])([א-ת])/g, '$1 $2')
+    .replace(/([א-ת])([a-zA-Z0-9])/g, '$1 $2')
+    // Clean up currency symbols positioning
+    .replace(/(\d)\s*([₪$€£¥])/g, '$1$2')
+    .replace(/([₪$€£¥])\s*(\d)/g, '$1$2')
+    // Fix Hebrew punctuation and abbreviations
+    .replace(/([א-ת])\s*([״׳])/g, '$1$2')
+    .replace(/([״׳])\s*([א-ת])/g, '$1$2')
+    .replace(/ח\s*״\s*מ/g, 'ח״מ')
+    .replace(/ת\s*״\s*ז/g, 'ת״ז')
+    .replace(/סה\s*״\s*כ/g, 'סה״כ')
+    // Normalize Hebrew date formats
+    .replace(/(\d{1,2})\s*[\/\-\.]\s*(\d{1,2})\s*[\/\-\.]\s*(\d{2,4})/g, '$1/$2/$3')
+    // Ensure table markers are preserved
+    .replace(/\[טבלה\/TABLE START\]/g, '[טבלה/TABLE START]')
+    .replace(/\[טבלה\/TABLE END\]/g, '[טבלה/TABLE END]')
+    .trim();
 }
 
 // =============================================================================
@@ -453,6 +518,18 @@ export async function generateRAGResponse(
   // Construct multilingual RAG prompt
   const languageInstructions = getLanguageInstructions(primaryLanguage, isMultilingual);
   
+  // Check for table content in retrieved chunks
+  const hasTableContent = retrievedChunks.some(chunk => 
+    chunk.metadata?.extraction_type === 'table' || 
+    chunk.metadata?.is_table_chunk === true ||
+    chunk.metadata?.is_hebrew_table === true
+  );
+  
+  const hasHebrewTableContent = retrievedChunks.some(chunk => 
+    chunk.metadata?.is_hebrew_table === true ||
+    (chunk.metadata?.extraction_type === 'table' && /[\u05D0-\u05EA]/.test(chunk.text))
+  );
+
   const prompt = `You are an expert AI assistant that provides accurate answers based on retrieved source material in multiple languages.
 
 MULTILINGUAL INSTRUCTIONS:
@@ -468,6 +545,27 @@ GENERAL INSTRUCTIONS:
 - If the sources contain OCR text from images, reference it appropriately
 - If the sources don't contain sufficient information to answer the question, say so clearly
 - Organize your response by chapter and section when multiple sources span different parts of the document
+- When presenting table data, ALWAYS format it as a proper markdown table with headers and separators
+- NEVER summarize table content - show the complete table structure with all rows and columns
+- Preserve exact text and numerical values from the source document in table format
+
+${hasTableContent || hasHebrewTableContent ? `
+CRITICAL TABLE FORMATTING REQUIREMENTS:
+- When table data is found in sources, ALWAYS present it in full markdown table format
+- Use proper table headers with alignment separators (|---|---|---|)
+- Show ALL rows from the source table - do not truncate or summarize
+- Maintain exact column structure and content as it appears in the document
+- For Hebrew tables, preserve Hebrew text, currency symbols (₪), and numerical values exactly
+- Include table markers [טבלה/TABLE START] and [טבלה/TABLE END] when present in source
+- Format example:
+  | Column 1 | Column 2 | Column 3 |
+  |----------|----------|----------|
+  | Value 1  | Value 2  | Value 3  |
+  | Value 4  | Value 5  | Value 6  |
+- If source contains multiple tables, show each table separately with clear labels
+- Preserve original language of table headers and content
+- Do NOT convert tables to prose or bullet points - always use table format
+` : ''}
 
 RETRIEVED SOURCES:
 ${context}
@@ -509,11 +607,21 @@ export async function generateChatResponse(
   
   console.log(`🌐 Detected primary language: ${primaryLanguage}${isMultilingual ? ' (multilingual content)' : ''}`);
   
-  // Check if query is asking about tables
-  const isTableQuery = /table|טבלה|נתונים|מחירים|רשימה|סכום|מספרים|תוצאות|דוח|סטטיסטיקה/i.test(query);
-  const hasTableContent = retrievedChunks.some(chunk => chunk.metadata?.extraction_type === 'table');
+  // Check if query is asking about tables (enhanced Hebrew detection)
+  const isTableQuery = /table|טבלה|נתונים|מחירים|רשימה|סכום|מספרים|תוצאות|דוח|סטטיסטיקה|מחיר|כמות|תאריך|שם|מספר|סה״כ|סהכ|ח״מ|חמ|ת״ז|תז|קוד|רשימה|פירוט|תיאור|מידע|נתון|ערך|סכומים|מחירון|עלות|הוצאה|הכנסה|רווח|הפסד|יתרה|חשבון|חשבונית|קבלה|אישור|תשלום|עסקה|פעולה|תנועה|יומן|דו״ח|דוח|רישום|רשומה|פריט|מוצר|שירות|לקוח|ספק|חברה|ארגון|מחלקה|עובד|משכורת|שכר|בונוס|תוספת|הטבה|ביטוח|מס|מע״מ|מעמ|הנחה|אחוז|אחוזים|יחידה|יחידות|כמויות|מלאי|מחסן|הזמנה|משלוח|אספקה|קבלת|מסירה|תאריך|זמן|שעה|יום|חודש|שנה|תקופה|מועד|לוח|זמנים|תכנון|תקציב|הקצאה|חלוקה|חישוב|סיכום|סה״כ|סהכ|סך|הכל|כולל|לא|כולל|נטו|ברוטו|לפני|אחרי|מס|הנחה|תוספת|עמלה|דמי|טיפול|משלוח|ביטוח|אחריות|שירות|תחזוקה|תמיכה|ייעוץ|הדרכה|הכשרה|קורס|סדנה|הרצאה|פגישה|ישיבה|ועידה|כנס|אירוע|מסיבה|חגיגה|טקס|חתונה|בר|מצווה|יום|הולדת|חג|מועד|פסטיבל|תערוכה|יריד|שוק|חנות|קניון|מרכז|מסחרי|עסקי|תעשייתי|משרדי|מגורים|דירה|בית|וילה|קוטג|דופלקס|פנטהאוס|סטודיו|חדר|מטבח|סלון|חדר|שינה|אמבטיה|שירותים|מרפסת|גינה|חצר|גג|מחסן|חניה|מעלית|מדרגות|כניסה|יציאה|דלת|חלון|קיר|תקרה|רצפה|ריצוף|צביעה|חשמל|מים|גז|טלפון|אינטרנט|כבלים|לוויין|מיזוג|חימום|קירור|אוורור|תאורה|ריהוט|מכשירי|חשמל|אלקטרוניקה|מחשב|טלפון|נייד|טאבלט|מסך|מקלדת|עכבר|מדפסת|סורק|מצלמה|וידאו|שמע|מוזיקה|ספרים|מגזינים|עיתונים|כתבי|עת|מחקר|מאמר|דוח|סקר|סטטיסטיקה|נתונים|מידע|בסיס|נתונים|מסד|נתונים|טבלה|שדה|רשומה|שורה|עמודה|תא|ערך|מפתח|אינדקס|חיפוש|מיון|סינון|קיבוץ|צירוף|חיבור|הפרדה|פיצול|מיזוג|עדכון|הוספה|מחיקה|שינוי|עריכה|תיקון|שיפור|פיתוח|בנייה|הקמה|הרחבה|שדרוג|חידוש|חדשנות|יצירתיות|עיצוב|תכנון|אדריכלות|הנדסה|טכנולוגיה|מדע|מחקר|פיתוח|חדשנות|המצאה|פטנט|זכויות|יוצרים|קניין|רוחני|מותג|סימן|מסחר|רישיון|היתר|אישור|תעודה|תקן|איכות|בטיחות|אבטחה|שמירה|הגנה|ביטחון|סיכון|ביטוח|אחריות|חבות|התחייבות|חוזה|הסכם|עסקה|עסק|עסקים|מסחר|מכירות|קניות|רכישה|השכרה|חכירה|שכירות|דמי|שכירות|משכנתא|הלוואה|אשראי|חוב|זכות|יתרה|חשבון|בנק|כרטיס|אשראי|צ׳ק|המחאה|העברה|בנקאית|פקדון|חיסכון|השקעה|מניות|אג״ח|אגח|קרן|נאמנות|ביטוח|פנסיה|קופת|גמל|חיסכון|לטווח|ארוך|קצר|בינוני|תקופה|מועד|פירעון|ריבית|הצמדה|מדד|אינפלציה|יוקר|מחיה|שכר|מינימום|ממוצע|מקסימום|מינימלי|מקסימלי|גבוה|נמוך|בינוני|רגיל|מיוחד|חריג|יוצא|דופן|נדיר|שכיח|נפוץ|מקובל|רגיל|סטנדרטי|בסיסי|מתקדם|מקצועי|מומחה|מנוסה|מתחיל|חדש|ישן|עתיק|מודרני|עכשווי|עדכני|חדיש|מתקדם|פיוני|חלוצי|מוביל|מנהיג|ראשון|אחרון|יחיד|יחידי|בודד|קבוצתי|צוותי|משותף|פרטי|אישי|אינדיבידואלי|כללי|ציבורי|פתוח|סגור|חסוי|סודי|חשאי|גלוי|ברור|מובן|פשוט|מורכב|קשה|קל|נוח|נוחות|קושי|בעיה|פתרון|תשובה|מענה|הסבר|הבהרה|פירוט|תיאור|הגדרה|מושג|רעיון|מחשבה|דעה|עמדה|גישה|שיטה|דרך|אופן|צורה|סגנון|אופי|טבע|מהות|עיקר|עיקרי|משני|צדדי|נוסף|תוספת|הרחבה|הוספה|שיפור|פיתוח|התקדמות|קידמה|צמיחה|גדילה|התפתחות|שינוי|תמורה|מהפכה|חדשנות|המצאה|יצירה|בריאה|הקמה|בנייה|הרחבה|שדרוג|חידוש|עדכון|תיקון|שיפור|מיטוב|אופטימיזציה|יעילות|אפקטיביות|פרודוקטיביות|תפוקה|ביצועים|הישגים|תוצאות|פירות|רווחים|הכנסות|הוצאות|עלויות|הוצאות|הכנסות|רווחים|הפסדים|יתרות|חובות|זכויות|נכסים|התחייבויות|הון|עצמי|זר|השקעות|מזומנים|נזילות|תזרים|מזומנים|תקציב|הקצאה|חלוקה|הפצה|חלוקת|רווחים|דיבידנד|בונוס|פרמיה|תוספת|הטבה|זכות|חובה|אחריות|התחייבות|חוזה|הסכם|עסקה|עסק|עסקים|מסחר|מכירות|קניות|רכישה|השכרה|חכירה|שכירות|דמי|שכירות|משכנתא|הלוואה|אשראי|חוב|זכות|יתרה|חשבון|בנק|כרטיס|אשראי|צ׳ק|המחאה|העברה|בנקאית|פקדון|חיסכון|השקעה|מניות|אג״ח|אגח|קרן|נאמנות|ביטוח|פנסיה|קופת|גמל|חיסכון|לטווח|ארוך|קצר|בינוני|תקופה|מועד|פירעון|ריבית|הצמדה|מדד|אינפלציה|יוקר|מחיה|שכר|מינימום|ממוצע|מקסימום|מינימלי|מקסימלי|גבוה|נמוך|בינוני|רגיל|מיוחד|חריג|יוצא|דופן|נדיר|שכיח|נפוץ|מקובל|רגיל|סטנדרטי|בסיסי|מתקדם|מקצועי|מומחה|מנוסה|מתחיל|חדש|ישן|עתיק|מודרני|עכשווי|עדכני|חדיש|מתקדם|פיוני|חלוצי|מוביל|מנהיג|ראשון|אחרון|יחיד|יחידי|בודד|קבוצתי|צוותי|משותף|פרטי|אישי|אינדיבידואלי|כללי|ציבורי|פתוח|סגור|חסוי|סודי|חשאי|גלוי|ברור|מובן|פשוט|מורכב|קשה|קל|נוח|נוחות|קושי|בעיה|פתרון|תשובה|מענה|הסבר|הבהרה|פירוט|תיאור|הגדרה|מושג|רעיון|מחשבה|דעה|עמדה|גישה|שיטה|דרך|אופן|צורה|סגנון|אופי|טבע|מהות|עיקר|עיקרי|משני|צדדי|נוסף|תוספת|הרחבה|הוספה|שיפור|פיתוח|התקדמות|קידמה|צמיחה|גדילה|התפתחות|שינוי|תמורה|מהפכה|חדשנות|המצאה|יצירה|בריאה|הקמה|בנייה|הרחבה|שדרוג|חידוש|עדכון|תיקון|שיפור|מיטוב|אופטימיזציה|יעילות|אפקטיביות|פרודוקטיביות|תפוקה|ביצועים|הישגים|תוצאות|פירות|רווחים|הכנסות|הוצאות|עלויות/i.test(query);
+  const hasTableContent = retrievedChunks.some(chunk => 
+    chunk.metadata?.extraction_type === 'table' || 
+    chunk.metadata?.is_table_chunk === true ||
+    chunk.metadata?.is_hebrew_table === true
+  );
   
-  console.log(`📊 Table query detected: ${isTableQuery}, Has table content: ${hasTableContent}`);
+  // Enhanced Hebrew table content detection
+  const hasHebrewTableContent = retrievedChunks.some(chunk => 
+    chunk.metadata?.is_hebrew_table === true ||
+    (chunk.metadata?.extraction_type === 'table' && /[\u05D0-\u05EA]/.test(chunk.text))
+  );
+  
+  console.log(`📊 Table query detected: ${isTableQuery}, Has table content: ${hasTableContent}, Has Hebrew tables: ${hasHebrewTableContent}`);
   
   // Build conversation history
   const historyText = chatHistory
@@ -538,11 +646,25 @@ export async function generateChatResponse(
       
       sourceInfo += ` | Relevance: ${(chunk.score * 100).toFixed(1)}%`;
       
-      // Add content type information
+      // Add enhanced content type information for Hebrew tables
       if (metadata.extraction_type === 'table') {
-        sourceInfo += ` | TYPE: TABLE DATA`;
+        if (metadata.is_hebrew_table) {
+          sourceInfo += ` | TYPE: HEBREW TABLE DATA`;
+        } else {
+          sourceInfo += ` | TYPE: TABLE DATA`;
+        }
       } else if (metadata.extraction_type === 'image_ocr') {
         sourceInfo += ` | TYPE: OCR FROM IMAGE`;
+      }
+      
+      // Add Hebrew table specific metadata
+      if (metadata.is_hebrew_table) {
+        const hebrewInfo = [];
+        if (metadata.has_currency) hebrewInfo.push('Currency');
+        if (metadata.has_hebrew_keywords) hebrewInfo.push('Hebrew Keywords');
+        if (hebrewInfo.length > 0) {
+          sourceInfo += ` | Hebrew Table Features: ${hebrewInfo.join(', ')}`;
+        }
       }
       
       // Add structure context to the chunk text
@@ -555,8 +677,8 @@ export async function generateChatResponse(
       }
       
       // Enhanced table formatting for Hebrew content
-      if (metadata.extraction_type === 'table') {
-        structuredText = formatTableForDisplay(structuredText, primaryLanguage);
+      if (metadata.extraction_type === 'table' || metadata.is_table_chunk) {
+        structuredText = formatTableForDisplay(structuredText, primaryLanguage, metadata.is_hebrew_table);
       }
       
       return `[${sourceInfo}]\n${structuredText}\n`;
@@ -564,7 +686,7 @@ export async function generateChatResponse(
     .join('\n---\n\n');
   
   // Get language-specific instructions with enhanced table handling
-  const languageInstructions = getLanguageInstructions(primaryLanguage, isMultilingual, isTableQuery, hasTableContent);
+  const languageInstructions = getLanguageInstructions(primaryLanguage, isMultilingual, isTableQuery, hasTableContent, hasHebrewTableContent);
   
   // Construct chat prompt with history and structure awareness
   const prompt = `You are a helpful AI assistant in a conversation. Use the retrieved sources to answer questions accurately.
@@ -579,16 +701,26 @@ GENERAL INSTRUCTIONS:
 - Use natural language for citations like "According to Chapter X, Section Y..." or "As mentioned in the [Chapter Name] section..."
 - Consider the conversation history for context
 - Organize information by document structure when helpful
+- When presenting table data, ALWAYS format it as a proper markdown table with headers and separators
+- NEVER summarize table content - show the complete table structure with all rows and columns
+- Preserve exact text and numerical values from the source document in table format
 
-${isTableQuery || hasTableContent ? `
-TABLE FORMATTING INSTRUCTIONS:
-- When presenting table data, preserve the original table structure and formatting
-- For Hebrew tables, maintain right-to-left text direction where appropriate
-- Use clear column separators (|) and row breaks for table display
-- Include Hebrew currency symbols (₪) and numbers as they appear in the source
-- When translating table headers, provide both Hebrew and English when helpful
-- Preserve numerical data exactly as it appears in the source
-- If table data is incomplete or unclear, mention this limitation
+${isTableQuery || hasTableContent || hasHebrewTableContent ? `
+CRITICAL TABLE FORMATTING REQUIREMENTS:
+- When table data is found in sources, ALWAYS present it in full markdown table format
+- Use proper table headers with alignment separators (|---|---|---|)
+- Show ALL rows from the source table - do not truncate or summarize
+- Maintain exact column structure and content as it appears in the document
+- For Hebrew tables, preserve Hebrew text, currency symbols (₪), and numerical values exactly
+- Include table markers [טבלה/TABLE START] and [טבלה/TABLE END] when present in source
+- Format example:
+  | Column 1 | Column 2 | Column 3 |
+  |----------|----------|----------|
+  | Value 1  | Value 2  | Value 3  |
+  | Value 4  | Value 5  | Value 6  |
+- If source contains multiple tables, show each table separately with clear labels
+- Preserve original language of table headers and content
+- Do NOT convert tables to prose or bullet points - always use table format
 ` : ''}
 
 ${historyText ? `CONVERSATION HISTORY:\n${historyText}\n\n` : ''}RETRIEVED SOURCES:
@@ -674,12 +806,23 @@ function detectContentLanguages(chunks: RetrievedChunk[]): {
 
 /**
  * Format table content for better display, especially for Hebrew content
+ * Ensures proper markdown table format with exact column preservation
  */
-function formatTableForDisplay(tableText: string, primaryLanguage: string): string {
+function formatTableForDisplay(tableText: string, primaryLanguage: string, isHebrewTable: boolean = false): string {
   if (!tableText || !tableText.trim()) return tableText;
   
+  // Remove table markers for processing but preserve them in output
+  let processedText = tableText;
+  const hasTableMarkers = /\[טבלה\/TABLE START\]|\[טבלה\/TABLE END\]/.test(tableText);
+  
+  if (hasTableMarkers) {
+    processedText = tableText
+      .replace(/\[טבלה\/TABLE START\]\s*/g, '')
+      .replace(/\s*\[טבלה\/TABLE END\]/g, '');
+  }
+  
   // Split into lines and process each line
-  const lines = tableText.split('\n').map(line => line.trim()).filter(line => line);
+  const lines = processedText.split('\n').map(line => line.trim()).filter(line => line);
   
   if (lines.length === 0) return tableText;
   
@@ -689,11 +832,18 @@ function formatTableForDisplay(tableText: string, primaryLanguage: string): stri
   const hasPipeSeparators = lines.some(line => line.includes('|'));
   
   if (!hasTabSeparators && !hasMultipleSpaces && !hasPipeSeparators) {
-    return tableText; // Not a table, return as-is
+    // Check if it's a simple list that should be formatted as a table
+    const hasStructuredData = lines.some(line => 
+      /\d+.*[א-ת]|[א-ת].*\d+|[₪$€£¥]/.test(line) && line.split(/\s+/).length >= 2
+    );
+    
+    if (!hasStructuredData) {
+      return tableText; // Not a table, return as-is
+    }
   }
   
-  // Process table formatting
-  const formattedLines = lines.map(line => {
+  // Process table formatting with enhanced column detection
+  const formattedLines = lines.map((line, lineIndex) => {
     // Handle different separator types
     let columns: string[];
     
@@ -701,37 +851,121 @@ function formatTableForDisplay(tableText: string, primaryLanguage: string): stri
       columns = line.split('|').map(col => col.trim()).filter(col => col);
     } else if (hasTabSeparators) {
       columns = line.split('\t').map(col => col.trim()).filter(col => col);
-    } else {
-      // Split on multiple spaces
+    } else if (hasMultipleSpaces) {
+      // Split on multiple spaces but preserve single spaces within content
       columns = line.split(/\s{2,}/).map(col => col.trim()).filter(col => col);
+    } else {
+      // For simple structured data, try to intelligently split
+      // Look for patterns like "text number" or "number text"
+      const words = line.split(/\s+/);
+      if (words.length >= 2) {
+        // Try to group related content
+        columns = [];
+        let currentColumn = '';
+        
+        for (let i = 0; i < words.length; i++) {
+          const word = words[i];
+          const nextWord = words[i + 1];
+          
+          if (currentColumn) {
+            currentColumn += ' ' + word;
+          } else {
+            currentColumn = word;
+          }
+          
+          // End column if next word looks like start of new column
+          if (!nextWord || 
+              (/\d/.test(word) && nextWord && /[א-ת]/.test(nextWord)) ||
+              (/[א-ת]/.test(word) && nextWord && /\d/.test(nextWord)) ||
+              /[₪$€£¥]/.test(word)) {
+            columns.push(currentColumn);
+            currentColumn = '';
+          }
+        }
+        
+        if (currentColumn) {
+          columns.push(currentColumn);
+        }
+      } else {
+        columns = [line]; // Single column
+      }
     }
     
-    // For Hebrew content, ensure proper spacing and currency formatting
-    if (primaryLanguage === 'hebrew') {
+    // Enhanced Hebrew content processing
+    if (isHebrewTable || primaryLanguage === 'hebrew' || /[\u05D0-\u05EA]/.test(line)) {
       columns = columns.map(col => {
-        // Fix Hebrew currency formatting
-        col = col.replace(/(\d)\s*₪/g, '$1₪');
-        col = col.replace(/₪\s*(\d)/g, '₪$1');
+        // Fix Hebrew currency formatting - keep currency symbol with number
+        col = col.replace(/(\d+)\s*₪/g, '$1₪');
+        col = col.replace(/₪\s*(\d+)/g, '₪$1');
         
-        // Ensure proper spacing around Hebrew text
+        // Fix other currency symbols
+        col = col.replace(/(\d+)\s*([€£¥$])/g, '$1$2');
+        col = col.replace(/([€£¥$])\s*(\d+)/g, '$1$2');
+        
+        // Ensure proper spacing around Hebrew text and numbers/English
         col = col.replace(/([a-zA-Z0-9])([א-ת])/g, '$1 $2');
         col = col.replace(/([א-ת])([a-zA-Z0-9])/g, '$1 $2');
+        
+        // Fix Hebrew punctuation and abbreviations
+        col = col.replace(/([א-ת])\s*([״׳])/g, '$1$2');
+        col = col.replace(/([״׳])\s*([א-ת])/g, '$1$2');
+        col = col.replace(/ח\s*״\s*מ/g, 'ח״מ');
+        col = col.replace(/ת\s*״\s*ז/g, 'ת״ז');
+        col = col.replace(/סה\s*״\s*כ/g, 'סה״כ');
+        
+        // Fix Hebrew date formats
+        col = col.replace(/(\d{1,2})\s*[\/\-\.]\s*(\d{1,2})\s*[\/\-\.]\s*(\d{2,4})/g, '$1/$2/$3');
+        
+        // Clean up extra spaces but preserve structure
+        col = col.replace(/\s+/g, ' ');
         
         return col.trim();
       });
     }
     
-    // Join columns with consistent separator
+    // Ensure minimum column count for consistency
+    if (columns.length === 1 && lines.length > 1) {
+      // Try to split single column into multiple if it contains separable content
+      const singleCol = columns[0];
+      if (/[א-ת].*\d|\d.*[א-ת]/.test(singleCol)) {
+        // Contains mixed Hebrew and numbers, try to separate
+        const parts = singleCol.split(/(\d+[₪$€£¥]?|\b\d+\b)/);
+        const newColumns = parts.filter(part => part.trim()).map(part => part.trim());
+        if (newColumns.length > 1) {
+          columns = newColumns;
+        }
+      }
+    }
+    
+    // Join columns with consistent separator and proper spacing
     return '| ' + columns.join(' | ') + ' |';
   });
   
-  // Add table header separator for better formatting
-  if (formattedLines.length > 1) {
-    const headerSeparator = '|' + formattedLines[0].split('|').slice(1, -1).map(() => '---').join('|') + '|';
-    formattedLines.splice(1, 0, headerSeparator);
+  // Add table header separator for proper markdown table format
+  if (formattedLines.length > 0) {
+    // Determine number of columns from first row
+    const firstRowColumns = formattedLines[0].split('|').length - 2; // Subtract 2 for leading/trailing |
+    
+    // Create header separator
+    const headerSeparator = '|' + Array(firstRowColumns).fill('---').join('|') + '|';
+    
+    // Insert after first row (header) if we have multiple rows
+    if (formattedLines.length > 1) {
+      formattedLines.splice(1, 0, headerSeparator);
+    } else {
+      // Single row - add separator anyway for proper table format
+      formattedLines.push(headerSeparator);
+    }
   }
   
-  return formattedLines.join('\n');
+  let formattedTable = formattedLines.join('\n');
+  
+  // Restore table markers if they were present
+  if (hasTableMarkers) {
+    formattedTable = `[טבלה/TABLE START]\n${formattedTable}\n[טבלה/TABLE END]`;
+  }
+  
+  return formattedTable;
 }
 
 /**
@@ -741,7 +975,8 @@ function getLanguageInstructions(
   primaryLanguage: string, 
   isMultilingual: boolean, 
   isTableQuery: boolean = false, 
-  hasTableContent: boolean = false
+  hasTableContent: boolean = false,
+  hasHebrewTableContent: boolean = false
 ): string {
   const languageMap: Record<string, string> = {
     hebrew: 'Hebrew (עברית)',
@@ -775,22 +1010,34 @@ function getLanguageInstructions(
 - Do not say "no information found" if you have relevant content in ${primaryLangName} - use and translate it appropriately`;
   }
   
-  // Add Hebrew-specific table instructions
-  if ((isTableQuery || hasTableContent) && primaryLanguage === 'hebrew') {
+  // Add enhanced Hebrew table instructions
+  if ((isTableQuery || hasTableContent || hasHebrewTableContent) && (primaryLanguage === 'hebrew' || hasHebrewTableContent)) {
     instructions += `
 
 HEBREW TABLE SPECIFIC INSTRUCTIONS:
-- When presenting Hebrew table data, maintain the original Hebrew text and numbers
-- Preserve Hebrew currency symbols (₪) and their positioning
+- When presenting Hebrew table data, maintain the original Hebrew text and numbers exactly as they appear
+- Preserve Hebrew currency symbols (₪) and their positioning relative to numbers
 - Keep Hebrew column headers in Hebrew with English translations in parentheses when helpful
 - Maintain right-to-left text flow for Hebrew content within tables
-- Use clear table formatting with | separators between columns
-- Present numerical data exactly as it appears in the Hebrew source
-- When explaining table content, use Hebrew terms for financial/business concepts when they appear in the source
-- Example table format:
-  | שם המוצר (Product Name) | מחיר (Price) | כמות (Quantity) |
-  |------------------------|-------------|----------------|
-  | מוצר א                  | 100₪       | 5              |`;
+- Use clear markdown table formatting with proper column alignment
+- When Hebrew tables contain mixed Hebrew-English content, preserve both languages as they appear
+- For Hebrew business/financial terms, keep the Hebrew term and provide English translation: "סכום (Total Amount)"
+- Preserve Hebrew abbreviations like ח״מ, ת״ז, סה״כ exactly as they appear
+- When explaining table content, use Hebrew financial/business terminology when it appears in the source
+- Always include table markers [טבלה/TABLE START] and [טבלה/TABLE END] when they exist in the source
+- Format Hebrew tables with clear structure:
+
+Example Hebrew table format:
+| שם המוצר (Product Name) | מחיר (Price) | כמות (Quantity) | סה״כ (Total) |
+|------------------------|-------------|----------------|-------------|
+| מוצר א                  | 100₪       | 5              | 500₪       |
+| מוצר ב                  | 250₪       | 2              | 500₪       |
+| **סה״כ (Grand Total)**  |             |                | **1,000₪** |
+
+- When Hebrew tables are detected (marked with Hebrew table markers), ALWAYS present them in full table format
+- Do not summarize Hebrew table content - show the complete table structure
+- Ensure Hebrew text direction is preserved in table cells
+- When numbers and Hebrew text are mixed in cells, maintain their original spacing and order`;
   }
   
   return instructions;

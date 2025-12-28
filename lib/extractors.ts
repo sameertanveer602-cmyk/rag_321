@@ -903,15 +903,19 @@ async function extractImageFileAdvanced(buffer: Buffer, filename: string): Promi
       // Try to detect and extract table-like structures
       const tables = extractTablesFromOcrText(text, words || []);
       tables.forEach((table, index) => {
+        // Add Hebrew table markers for better identification
+        const markedTableText = `[טבלה/TABLE START]\n${table.text}\n[טבלה/TABLE END]`;
+        
         extractedContent.push({
-          text: table.text,
+          text: markedTableText,
           type: 'table',
           metadata: {
             source_filename: filename,
             extraction_type: 'table',
             table_index: index,
             ocr_confidence: table.confidence,
-            is_ocr_table: true
+            is_ocr_table: true,
+            is_hebrew_table: /[\u05D0-\u05EA]/.test(table.text)
           }
         });
       });
@@ -1061,7 +1065,7 @@ function extractTablesFromPdfText(text: string): string[] {
     // Hebrew-specific table patterns
     const hasHebrewNumbers = /[\u05D0-\u05EA].*\d|\d.*[\u05D0-\u05EA]/.test(trimmedLine);
     const hasCurrency = /[₪$€£¥]/.test(trimmedLine);
-    const hasHebrewTableWords = /[\u05D0-\u05EA].*(סכום|מחיר|כמות|תאריך|שם|מספר|סה״כ|סהכ|ח״מ|חמ|ת״ז|תז|קוד|רשימה|פירוט|תיאור)/.test(trimmedLine);
+    const hasHebrewTableWords = /[\u05D0-\u05EA].*(סכום|מחיר|כמות|תאריך|שם|מספר|סה״כ|סהכ|ח״מ|חמ|ת״ז|תז|קוד|רשימה|פירוט|תיאור|טבלה|נתונים|דוח|סטטיסטיקה)/.test(trimmedLine);
     
     // Mixed content patterns (Hebrew + English/Numbers)
     const hasMixedContent = /[\u05D0-\u05EA].*[a-zA-Z0-9]|[a-zA-Z0-9].*[\u05D0-\u05EA]/.test(trimmedLine);
@@ -1074,11 +1078,16 @@ function extractTablesFromPdfText(text: string): string[] {
     const hasHebrewStructure = /[\u05D0-\u05EA]+\s+\d+|\d+\s+[\u05D0-\u05EA]+/.test(trimmedLine);
     const hasMultipleHebrewWords = (trimmedLine.match(/[\u05D0-\u05EA]+/g) || []).length >= 2;
     
+    // Hebrew table header patterns
+    const hasHebrewTableHeaders = /^[\u05D0-\u05EA\s]+\|[\u05D0-\u05EA\s]+\|/.test(trimmedLine) || 
+                                 /^[\u05D0-\u05EA\s]+\s{2,}[\u05D0-\u05EA\s]+\s{2,}/.test(trimmedLine);
+    
     // Check for table-like structure
     const isTableLike = hasMultipleColumns || hasTabSeparators || hasPipeSeparators || 
                        (hasMixedContent && (hasHebrewNumbers || hasCurrency || hasHebrewTableWords)) ||
                        hasDatePatterns || hasPercentages || hasHebrewStructure ||
-                       (hasMultipleHebrewWords && (hasNumbers(trimmedLine) || hasCurrency));
+                       (hasMultipleHebrewWords && (hasNumbers(trimmedLine) || hasCurrency)) ||
+                       hasHebrewTableHeaders;
     
     if (isTableLike) {
       if (!inTable) {
@@ -1091,7 +1100,10 @@ function extractTablesFromPdfText(text: string): string[] {
         // Clean and format the table text for Hebrew content
         const tableText = currentTable.join('\n');
         const cleanedTable = cleanHebrewTableText(tableText);
-        tables.push(cleanedTable);
+        
+        // Add table markers for better identification
+        const markedTable = `[טבלה/TABLE START]\n${cleanedTable}\n[טבלה/TABLE END]`;
+        tables.push(markedTable);
       }
       inTable = false;
       currentTable = [];
@@ -1102,7 +1114,8 @@ function extractTablesFromPdfText(text: string): string[] {
   if (inTable && currentTable.length >= 2) {
     const tableText = currentTable.join('\n');
     const cleanedTable = cleanHebrewTableText(tableText);
-    tables.push(cleanedTable);
+    const markedTable = `[טבלה/TABLE START]\n${cleanedTable}\n[טבלה/TABLE END]`;
+    tables.push(markedTable);
   }
   
   return tables;
