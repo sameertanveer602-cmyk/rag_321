@@ -99,10 +99,10 @@ export default function Home() {
     setUploadResult(null);
 
     try {
-      // Check file size before processing (50MB limit for Vercel)
-      const maxSize = 50 * 1024 * 1024; // 50MB
+      // Check file size before processing (100MB limit for local development)
+      const maxSize = 100 * 1024 * 1024; // 100MB
       if (selectedFile.size > maxSize) {
-        throw new Error(`File size (${(selectedFile.size / 1024 / 1024).toFixed(2)}MB) exceeds 50MB limit for serverless deployment`);
+        throw new Error(`File size (${(selectedFile.size / 1024 / 1024).toFixed(2)}MB) exceeds 100MB limit`);
       }
 
       // Convert file to base64
@@ -122,9 +122,9 @@ export default function Home() {
         chunk_overlap: 50
       };
 
-      // Add timeout to the fetch request
+      // Add timeout to the fetch request (longer for local development)
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 28000); // 28 seconds timeout
+      const timeoutId = setTimeout(() => controller.abort(), 118000); // 118 seconds timeout for local
 
       try {
         const response = await fetch('/api/upload', {

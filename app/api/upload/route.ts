@@ -8,7 +8,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { supabaseAdmin, uploadFile } from '@/lib/supabase';
 import { extractContent, detectMimeType, validateFileSize } from '@/lib/extractors';
 import { chunkContent, storeDocumentsWithEmbeddings } from '@/lib/langchain';
-import { UploadRequest, UploadResponse, SupportedMimeType } from '@/lib/types';
+import { UploadRequest, UploadResponse, SupportedMimeType, ExtractedContent } from '@/lib/types';
 
 /**
  * Document Upload API Endpoint
@@ -28,13 +28,13 @@ import { UploadRequest, UploadResponse, SupportedMimeType } from '@/lib/types';
 export async function POST(request: NextRequest) {
   console.log('📤 Document upload request received');
   
-  // Add timeout protection for Vercel deployment
+  // Add timeout protection for local development
   const startTime = Date.now();
-  const TIMEOUT_MS = 25000; // 25 seconds (Vercel hobby plan limit is 30s)
+  const TIMEOUT_MS = 180000; // 3 minutes for local development (increased for resilience)
   
   const timeoutCheck = () => {
     if (Date.now() - startTime > TIMEOUT_MS) {
-      throw new Error('Processing timeout - file too large or complex for serverless environment');
+      throw new Error('Overall processing timeout - document may be too large or complex');
     }
   };
   
@@ -73,10 +73,10 @@ export async function POST(request: NextRequest) {
       );
     }
     
-    // Validate file size (reduce limit for Vercel to 50MB)
-    if (!validateFileSize(fileBuffer, 50)) {
+    // Validate file size (increase limit for local development)
+    if (!validateFileSize(fileBuffer, 100)) {
       return NextResponse.json(
-        { error: 'File size exceeds 50MB limit for serverless deployment', code: 'FILE_TOO_LARGE' },
+        { error: 'File size exceeds 100MB limit', code: 'FILE_TOO_LARGE' },
         { status: 413 }
       );
     }
@@ -110,15 +110,21 @@ export async function POST(request: NextRequest) {
       extractedContent = await Promise.race([
         extractContent(fileBuffer, filename, mimeType as SupportedMimeType),
         new Promise((_, reject) => 
-          setTimeout(() => reject(new Error('Content extraction timeout')), 15000)
+          setTimeout(() => reject(new Error('Content extraction timeout')), 90000) // 1.5 minutes for extraction
         )
       ]) as any;
     } catch (error) {
       console.error('❌ Content extraction failed or timed out:', error);
       return NextResponse.json(
         { 
-          error: 'Content extraction failed or timed out. Try a smaller file or simpler format.',
-          code: 'EXTRACTION_TIMEOUT'
+          error: 'Content extraction failed or timed out. The document may be too complex or contain unsupported content.',
+          code: 'EXTRACTION_TIMEOUT',
+          suggestions: [
+            'Try a simpler document format (TXT, simple PDF)',
+            'Remove images or complex formatting',
+            'Split large documents into smaller parts',
+            'Restart the server and try again'
+          ]
         },
         { status: 408 }
       );
@@ -127,23 +133,72 @@ export async function POST(request: NextRequest) {
     console.log(`✅ Extracted ${extractedContent.length} content elements`);
     
     // Log extraction summary
-    const extractionSummary = extractedContent.reduce((acc: any, content: any) => {
+    const extractionSummary = extractedContent.reduce((acc: Record<string, number>, content: ExtractedContent) => {
       acc[content.type] = (acc[content.type] || 0) + 1;
       return acc;
     }, {} as Record<string, number>);
     console.log('📊 Extraction summary:', extractionSummary);
     
-    // STEP 3: Chunk content using LangChain
+    // STEP 3: Adaptive chunking based on document size and content
     timeoutCheck();
-    console.log('✂️  Chunking content...');
-    const chunks = await chunkContent(extractedContent, chunk_size, chunk_overlap);
-    console.log(`✅ Created ${chunks.length} chunks`);
+    console.log('✂️  Analyzing document for adaptive chunking...');
     
-    // Check if we have too many chunks for serverless processing
-    if (chunks.length > 100) {
+    // Calculate total document size
+    const totalDocSize = extractedContent.reduce((sum: number, content: ExtractedContent) => sum + content.text.length, 0);
+    const hasComplexContent = extractedContent.some((content: ExtractedContent) => 
+      content.type === 'table' || 
+      content.type === 'image_ocr' || 
+      /[\u05D0-\u05EA]/.test(content.text) // Hebrew content
+    );
+    
+    // Adaptive chunk parameters based on document characteristics
+    let adaptiveChunkSize: number;
+    let adaptiveOverlap: number;
+    
+    if (totalDocSize < 5000) {
+      // Very small document - use larger chunks to reduce embedding calls
+      adaptiveChunkSize = 1500;
+      adaptiveOverlap = 50;
+      console.log('📄 Tiny document detected - using large chunks for efficiency');
+    } else if (totalDocSize < 20000) {
+      // Medium document - balanced approach
+      adaptiveChunkSize = 1200;
+      adaptiveOverlap = 100;
+      console.log('📄 Small document detected - using balanced chunks');
+    } else if (totalDocSize < 50000) {
+      // Large document - standard chunks
+      adaptiveChunkSize = 1000;
+      adaptiveOverlap = 150;
+      console.log('📄 Medium document detected - using standard chunks');
+    } else if (totalDocSize < 150000) {
+      // Very large document - smaller chunks for better granularity
+      adaptiveChunkSize = 800;
+      adaptiveOverlap = 120;
+      console.log('📄 Large document detected - using granular chunks');
+    } else {
+      // Extremely large document - optimize for performance
+      adaptiveChunkSize = 600;
+      adaptiveOverlap = 80;
+      console.log('📄 Very large document detected - using optimized chunks');
+    }
+    
+    // Adjust for complex content (tables, Hebrew, OCR)
+    if (hasComplexContent) {
+      adaptiveChunkSize = Math.min(adaptiveChunkSize, 900); // Smaller chunks for complex content
+      adaptiveOverlap = Math.max(adaptiveOverlap, 100); // More overlap for context
+      console.log('🔤 Complex content detected - adjusting for tables/Hebrew/OCR');
+    }
+    
+    console.log(`📏 Adaptive chunking: size=${adaptiveChunkSize}, overlap=${adaptiveOverlap} (doc size: ${totalDocSize} chars)`);
+    
+    const chunks = await chunkContent(extractedContent, adaptiveChunkSize, adaptiveOverlap);
+    console.log(`✅ Created ${chunks.length} adaptive chunks optimized for document characteristics`);
+    
+    // Check if we have too many chunks for processing
+    if (chunks.length > 500) {
       return NextResponse.json(
         { 
-          error: `Document too large: ${chunks.length} chunks created. Maximum 100 chunks allowed for serverless deployment.`,
+          error: `Document too large: ${chunks.length} chunks created. Maximum 500 chunks allowed for local development.`,
           code: 'TOO_MANY_CHUNKS'
         },
         { status: 413 }
@@ -185,36 +240,55 @@ export async function POST(request: NextRequest) {
     
     console.log(`✅ Document metadata stored with ID: ${documentData.id}`);
     
-    // STEP 5: Process embeddings and store chunks with timeout protection
+    // STEP 5: Process embeddings and store chunks with resilient error handling
     timeoutCheck();
     console.log('🧠 Processing embeddings and storing chunks...');
     
     try {
-      await Promise.race([
-        storeDocumentsWithEmbeddings(chunks, documentData.id),
-        new Promise((_, reject) => 
-          setTimeout(() => reject(new Error('Embedding processing timeout')), 20000)
-        )
-      ]);
+      // No timeout wrapper - let the embedding function handle its own timeouts
+      // This prevents cascade failures when one chunk times out
+      await storeDocumentsWithEmbeddings(chunks, documentData.id);
+      console.log('✅ All chunks processed and stored with embeddings');
     } catch (error) {
-      console.error('❌ Embedding processing failed or timed out:', error);
+      console.error('❌ Embedding processing encountered errors:', error);
       
-      // Clean up document record if embedding fails
-      await supabaseAdmin
-        .from('documents')
-        .delete()
-        .eq('id', documentData.id);
+      // Check if we have any chunks stored (partial success)
+      const { data: storedChunks, error: checkError } = await supabaseAdmin
+        .from('document_chunks')
+        .select('id')
+        .eq('doc_id', documentData.id);
       
-      return NextResponse.json(
-        { 
-          error: 'Embedding processing failed or timed out. Try a smaller document or contact support.',
-          code: 'EMBEDDING_TIMEOUT'
-        },
-        { status: 408 }
-      );
+      const storedCount = storedChunks?.length || 0;
+      const successRate = chunks.length > 0 ? (storedCount / chunks.length) * 100 : 0;
+      
+      console.log(`📊 Partial success: ${storedCount}/${chunks.length} chunks stored (${successRate.toFixed(1)}%)`);
+      
+      // If we have acceptable success rate, don't fail the entire upload
+      if (successRate >= 70) {
+        console.log(`✅ Acceptable success rate (${successRate.toFixed(1)}%) - document is searchable`);
+        // Continue to success response
+      } else {
+        // Clean up document record if embedding fails badly
+        console.log(`❌ Poor success rate (${successRate.toFixed(1)}%) - cleaning up...`);
+        await supabaseAdmin
+          .from('documents')
+          .delete()
+          .eq('id', documentData.id);
+        
+        return NextResponse.json(
+          { 
+            error: error instanceof Error ? error.message : 'Embedding processing failed',
+            code: 'EMBEDDING_FAILED',
+            details: {
+              chunks_attempted: chunks.length,
+              chunks_stored: storedCount,
+              success_rate: successRate.toFixed(1) + '%'
+            }
+          },
+          { status: 500 }
+        );
+      }
     }
-    
-    console.log('✅ All chunks processed and stored with embeddings');
     
     // Build response
     const response: UploadResponse = {

@@ -88,7 +88,7 @@ export interface SupabaseSearchResult {
   metadata: Record<string, any>;
 }
 
-export type ExtractionType = 'text' | 'table' | 'json' | 'image_ocr' | 'graph_ocr';
+export type ExtractionType = 'text' | 'table' | 'json' | 'image_ocr' | 'graph_ocr' | 'gap_fill';
 
 export interface ExtractedContent {
   text: string;

@@ -16,25 +16,61 @@ import { v4 as uuidv4 } from 'uuid';
 interface DocumentStructure {
   chapters: ChapterInfo[];
   sections: SectionInfo[];
+  tables: TableInfo[];
+  examples: ExampleInfo[];
+  pages: PageInfo[];
   currentChapter?: string;
   currentSection?: string;
+  currentPage?: number;
 }
 
 interface ChapterInfo {
   title: string;
+  titleHebrew?: string;
   level: number;
   startIndex: number;
   endIndex?: number;
   pageNumber?: number;
+  chapterNumber?: string;
 }
 
 interface SectionInfo {
   title: string;
+  titleHebrew?: string;
   level: number;
   startIndex: number;
   endIndex?: number;
   chapter?: string;
   pageNumber?: number;
+  sectionNumber?: string;
+}
+
+interface TableInfo {
+  tableNumber?: number;
+  title?: string;
+  titleHebrew?: string;
+  startIndex: number;
+  endIndex?: number;
+  pageNumber?: number;
+  chapter?: string;
+  section?: string;
+}
+
+interface ExampleInfo {
+  exampleNumber?: number;
+  title?: string;
+  titleHebrew?: string;
+  startIndex: number;
+  endIndex?: number;
+  pageNumber?: number;
+  chapter?: string;
+  section?: string;
+}
+
+interface PageInfo {
+  pageNumber: number;
+  startIndex: number;
+  endIndex?: number;
 }
 
 // Dynamic imports for optional dependencies
@@ -64,126 +100,269 @@ async function initializeDependencies() {
 // =============================================================================
 
 /**
- * Detect chapters and sections from document text
+ * Enhanced Hebrew-aware document structure detection
+ * Detects chapters, sections, tables, examples, and page numbers from Hebrew regulatory documents
+ * Handles RTL markers and Hebrew text encoding
  */
 function detectDocumentStructure(text: string): DocumentStructure {
   const lines = text.split('\n');
   const structure: DocumentStructure = {
     chapters: [],
-    sections: []
+    sections: [],
+    tables: [],
+    examples: [],
+    pages: []
   };
   
-  // Patterns for detecting chapters and sections
-  const chapterPatterns = [
-    /^(chapter\s+\d+|ch\s*\d+|chapter\s+[ivxlcdm]+)\s*[:\-\.]?\s*(.+)/i,
-    /^(\d+\.\s*)(.+)/,
-    /^([ivxlcdm]+\.\s*)(.+)/i,
-    /^(part\s+\d+|part\s+[ivxlcdm]+)\s*[:\-\.]?\s*(.+)/i,
-    /^(unit\s+\d+)\s*[:\-\.]?\s*(.+)/i
+  // Clean RTL markers and normalize whitespace for pattern matching
+  const cleanLine = (line: string) => {
+    return line
+      .replace(/[‫‬‪‬]/g, '')  // Remove all RTL/LTR markers
+      .replace(/\s+/g, ' ')      // Normalize whitespace
+      .trim();
+  };
+  
+  // Hebrew chapter patterns (הקדמה, עקרונות כלליים, etc.)
+  const hebrewChapterPatterns = [
+    /^(הקדמה|מבוא|רקע|סיכום|מסקנות|נספח|תוספת|נספחים|תוספות)$/,
+    /^(עקרונות\s+כלליים|עקרונות|כללים|הנחיות|הוראות)$/,
+    /^(פרק|חלק)\s+([א-ת]+|[0-9]+|[IVX]+)\s*[:\-\.]?\s*(.+)/,
+    /^([א-ת]{3,})\s+([א-ת\s]{5,})$/  // Hebrew title pattern
   ];
   
-  const sectionPatterns = [
-    /^(\d+\.\d+\s*)(.+)/,
-    /^(\d+\.\d+\.\d+\s*)(.+)/,
-    /^(section\s+\d+|sec\s*\d+)\s*[:\-\.]?\s*(.+)/i,
-    /^([a-z]\.\s*)(.+)/i,
-    /^(\w+\s+\d+\.\d+)\s*[:\-\.]?\s*(.+)/i
+  // Hebrew section patterns (סעיף 1.1, 2.1, etc.) - more flexible
+  const hebrewSectionPatterns = [
+    /^(\d+\.\d+)\s+(.{3,})/,  // 1.1, 2.1, etc. with at least 3 chars title
+    /^(\d+\.\d+\.\d+)\s+(.{3,})/,  // 1.1.1, 2.1.1, etc.
+    /סעיף\s+(\d+\.\d+)\s+(.{3,})/,  // Can appear anywhere in line
+    /סעיף\s+(\d+)\s+(.{3,})/,
+    /^([א-ת])\.\s+(.{3,})/  // א., ב., ג., etc.
   ];
   
-  const headingPatterns = [
-    /^#{1,6}\s+(.+)/, // Markdown headers
-    /^(.+)\n[=\-]{3,}/, // Underlined headers
-    /^([A-Z][A-Z\s]{10,})$/, // ALL CAPS headers
+  // Hebrew table patterns (טבלה 1, טבלה 2, etc.) - more flexible
+  const hebrewTablePatterns = [
+    /טבלה\s*:?\s*(\d+)\s*[:\-\.]?\s*(.{0,})/,  // טבלה 1: Title or טבלה :1
+    /^\[טבלה\/TABLE\s+START\]/,
+    /table\s+(\d+)\s*[:\-\.]?\s*(.+)/i
+  ];
+  
+  // Hebrew example patterns (דוגמה 1, דוגמה 2, etc.) - more flexible
+  const hebrewExamplePatterns = [
+    /דוגמה\s*:?\s*(\d+)\s*[:\-\.]?\s*(.{0,})/,  // דוגמה 1: Title or דוגמה :1
+    /דוגמא\s*:?\s*(\d+)\s*[:\-\.]?\s*(.{0,})/,
+    /example\s+(\d+)\s*[:\-\.]?\s*(.+)/i
+  ];
+  
+  // Page number patterns (at top of pages) - with RTL markers and more strict
+  const pageNumberPatterns = [
+    /^(\d+)$/,    // Simple numbers on their own line (must be alone)
+    /^עמוד\s+(\d+)$/,
+    /^page\s+(\d+)$/i
   ];
   
   let currentChapter: string | undefined;
-  let chapterIndex = 0;
-  let sectionIndex = 0;
+  let currentChapterHebrew: string | undefined;
+  let currentSection: string | undefined;
+  let currentSectionHebrew: string | undefined;
+  let currentSectionNumber: string | undefined;
+  let currentPage: number | undefined;
+  let inTable = false;
+  let currentTableStart: number | undefined;
+  let currentTableNumber: number | undefined;
+  let currentTableTitle: string | undefined;
   
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i].trim();
-    if (!line) continue;
+    const line = lines[i];
+    const cleaned = cleanLine(line);
+    if (!cleaned) continue;
     
-    // Check for chapter patterns
-    let isChapter = false;
-    for (const pattern of chapterPatterns) {
-      const match = line.match(pattern);
-      if (match) {
-        const chapterTitle = match[2]?.trim() || match[1]?.trim();
-        if (chapterTitle && chapterTitle.length > 3 && chapterTitle.length < 100) {
-          structure.chapters.push({
-            title: chapterTitle,
-            level: 1,
-            startIndex: i,
-            pageNumber: Math.floor(i / 50) + 1 // Rough page estimation
+    // Detect page numbers - must be ONLY a number, nothing else, and reasonable range
+    if (cleaned.length <= 3 && /^\d+$/.test(cleaned)) {
+      const pageNum = parseInt(cleaned);
+      // Only accept page numbers 1-50 and skip if it looks like it's part of other text
+      if (pageNum > 0 && pageNum <= 50) {
+        // Check if previous and next lines are empty or very short (page numbers are usually isolated)
+        const prevLine = i > 0 ? cleanLine(lines[i - 1]) : '';
+        const nextLine = i < lines.length - 1 ? cleanLine(lines[i + 1]) : '';
+        
+        // Page numbers are usually on their own with empty lines around them
+        if (prevLine.length < 10 || nextLine.length < 10) {
+          currentPage = pageNum;
+          structure.pages.push({
+            pageNumber: pageNum,
+            startIndex: i
           });
-          currentChapter = chapterTitle;
-          chapterIndex++;
-          isChapter = true;
-          break;
+          console.log(`📄 Detected page ${pageNum} at line ${i + 1}`);
+        }
+      }
+    }
+    
+    // Detect Hebrew chapters - be more strict to avoid false positives
+    let isChapter = false;
+    // Only check for chapters if the line is relatively short (not a paragraph)
+    if (cleaned.length < 100) {
+      for (const pattern of hebrewChapterPatterns) {
+        const match = cleaned.match(pattern);
+        if (match) {
+          let chapterTitle = '';
+          let chapterNumber = '';
+          
+          if (match[3]) {
+            // Pattern with chapter number: פרק 1 - Title
+            chapterNumber = match[2];
+            chapterTitle = match[3].trim();
+          } else if (match[2]) {
+            // Pattern with two groups
+            chapterTitle = match[2].trim();
+          } else {
+            // Single word chapter (הקדמה, מבוא, etc.)
+            chapterTitle = match[1].trim();
+          }
+          
+          // Only accept if title is reasonable length (not too long, not too short)
+          if (chapterTitle && chapterTitle.length >= 2 && chapterTitle.length < 80) {
+            structure.chapters.push({
+              title: chapterTitle,
+              titleHebrew: chapterTitle,
+              level: 1,
+              startIndex: i,
+              pageNumber: currentPage,
+              chapterNumber: chapterNumber || undefined
+            });
+            currentChapter = chapterTitle;
+            currentChapterHebrew = chapterTitle;
+            console.log(`📖 Detected chapter: "${chapterTitle}" at line ${i + 1}, page ${currentPage}`);
+            isChapter = true;
+            break;
+          }
         }
       }
     }
     
     if (isChapter) continue;
     
-    // Check for section patterns
+    // Detect Hebrew sections - check both current line and combination with next line
+    // Be more strict to avoid false positives
     let isSection = false;
-    for (const pattern of sectionPatterns) {
-      const match = line.match(pattern);
-      if (match) {
-        const sectionTitle = match[2]?.trim() || match[1]?.trim();
-        if (sectionTitle && sectionTitle.length > 3 && sectionTitle.length < 100) {
-          const level = (match[1]?.split('.').length || 1) + 1;
-          structure.sections.push({
-            title: sectionTitle,
-            level: level,
-            startIndex: i,
-            chapter: currentChapter,
-            pageNumber: Math.floor(i / 50) + 1
-          });
-          sectionIndex++;
-          isSection = true;
-          break;
+    if (cleaned.length < 150) {  // Sections shouldn't be too long
+      for (const pattern of hebrewSectionPatterns) {
+        const match = cleaned.match(pattern);
+        if (match) {
+          const sectionNumber = match[1]?.trim();
+          let sectionTitle = match[2]?.trim();
+          
+          // If title is too short or empty, try to get it from the next line
+          if ((!sectionTitle || sectionTitle.length < 3) && i + 1 < lines.length) {
+            const nextLine = cleanLine(lines[i + 1]);
+            if (nextLine && nextLine.length >= 3 && nextLine.length < 100 && !/^\d/.test(nextLine)) {
+              sectionTitle = nextLine;
+            }
+          }
+          
+          // Only accept if title is reasonable length
+          if (sectionTitle && sectionTitle.length >= 2 && sectionTitle.length < 100) {
+            const level = sectionNumber ? (sectionNumber.split('.').length + 1) : 2;
+            structure.sections.push({
+              title: sectionTitle,
+              titleHebrew: sectionTitle,
+              level: level,
+              startIndex: i,
+              chapter: currentChapter,
+              pageNumber: currentPage,
+              sectionNumber: sectionNumber
+            });
+            currentSection = sectionTitle;
+            currentSectionHebrew = sectionTitle;
+            currentSectionNumber = sectionNumber;
+            console.log(`📑 Detected section ${sectionNumber}: "${sectionTitle}" at line ${i + 1}, page ${currentPage}`);
+            isSection = true;
+            break;
+          }
         }
       }
     }
     
     if (isSection) continue;
     
-    // Check for general heading patterns
-    for (const pattern of headingPatterns) {
-      const match = line.match(pattern);
+    // Detect Hebrew tables - handle titles on next line
+    for (const pattern of hebrewTablePatterns) {
+      const match = cleaned.match(pattern);
       if (match) {
-        const title = match[1]?.trim();
-        if (title && title.length > 3 && title.length < 100) {
-          // Determine if it's more likely a chapter or section based on context
-          const isLikelyChapter = /^(introduction|conclusion|summary|overview|background|methodology|results|discussion|references|appendix|bibliography)/i.test(title);
+        if (match[0].includes('START')) {
+          // Table start marker
+          inTable = true;
+          currentTableStart = i;
+        } else if (match[1]) {
+          // Table with number: טבלה 1: Title
+          const tableNumber = parseInt(match[1]);
+          let tableTitle = match[2]?.trim() || '';
           
-          if (isLikelyChapter || !currentChapter) {
-            structure.chapters.push({
-              title: title,
-              level: 1,
-              startIndex: i,
-              pageNumber: Math.floor(i / 50) + 1
-            });
-            currentChapter = title;
-          } else {
-            structure.sections.push({
-              title: title,
-              level: 2,
-              startIndex: i,
-              chapter: currentChapter,
-              pageNumber: Math.floor(i / 50) + 1
-            });
+          // If title is empty or too short, try next line
+          if ((!tableTitle || tableTitle.length < 3) && i + 1 < lines.length) {
+            const nextLine = cleanLine(lines[i + 1]);
+            if (nextLine && nextLine.length >= 3 && !/^טבלה|^table/i.test(nextLine)) {
+              tableTitle = nextLine;
+            }
           }
-          break;
+          
+          structure.tables.push({
+            tableNumber: tableNumber,
+            title: tableTitle,
+            titleHebrew: tableTitle,
+            startIndex: i,
+            pageNumber: currentPage,
+            chapter: currentChapter,
+            section: currentSection
+          });
+          currentTableNumber = tableNumber;
+          currentTableTitle = tableTitle;
+          console.log(`📊 Detected table ${tableNumber}: "${tableTitle}" at line ${i + 1}, page ${currentPage}`);
         }
+        break;
+      }
+    }
+    
+    // Detect table end marker
+    if (cleaned.includes('[טבלה/TABLE END]') && inTable && currentTableStart !== undefined) {
+      inTable = false;
+      // Update the last table's end index
+      if (structure.tables.length > 0) {
+        structure.tables[structure.tables.length - 1].endIndex = i;
+      }
+      currentTableStart = undefined;
+    }
+    
+    // Detect Hebrew examples - handle titles on next line
+    for (const pattern of hebrewExamplePatterns) {
+      const match = cleaned.match(pattern);
+      if (match && match[1]) {
+        const exampleNumber = parseInt(match[1]);
+        let exampleTitle = match[2]?.trim() || '';
+        
+        // If title is empty or too short, try next line
+        if ((!exampleTitle || exampleTitle.length < 3) && i + 1 < lines.length) {
+          const nextLine = cleanLine(lines[i + 1]);
+          if (nextLine && nextLine.length >= 3 && !/^דוגמה|^example/i.test(nextLine)) {
+            exampleTitle = nextLine;
+          }
+        }
+        
+        structure.examples.push({
+          exampleNumber: exampleNumber,
+          title: exampleTitle,
+          titleHebrew: exampleTitle,
+          startIndex: i,
+          pageNumber: currentPage,
+          chapter: currentChapter,
+          section: currentSection
+        });
+        console.log(`💡 Detected example ${exampleNumber}: "${exampleTitle}" at line ${i + 1}, page ${currentPage}`);
+        break;
       }
     }
   }
   
-  // Set end indices for chapters and sections
+  // Set end indices for chapters
   for (let i = 0; i < structure.chapters.length; i++) {
     const nextChapter = structure.chapters[i + 1];
     if (nextChapter) {
@@ -193,6 +372,7 @@ function detectDocumentStructure(text: string): DocumentStructure {
     }
   }
   
+  // Set end indices for sections
   for (let i = 0; i < structure.sections.length; i++) {
     const nextSection = structure.sections[i + 1];
     const nextChapter = structure.chapters.find(ch => ch.startIndex > structure.sections[i].startIndex);
@@ -206,37 +386,106 @@ function detectDocumentStructure(text: string): DocumentStructure {
     }
   }
   
+  // Set end indices for pages
+  for (let i = 0; i < structure.pages.length; i++) {
+    const nextPage = structure.pages[i + 1];
+    if (nextPage) {
+      structure.pages[i].endIndex = nextPage.startIndex - 1;
+    } else {
+      structure.pages[i].endIndex = lines.length - 1;
+    }
+  }
+  
   return structure;
 }
 
 /**
- * Find the current chapter and section for a given text position
+ * Find the current chapter, section, page, table, and example for a given text position
  */
-function findCurrentStructure(structure: DocumentStructure, textIndex: number): { chapter?: string; section?: string } {
+function findCurrentStructure(structure: DocumentStructure, textIndex: number): { 
+  chapter?: string; 
+  chapterHebrew?: string;
+  chapterNumber?: string;
+  section?: string; 
+  sectionHebrew?: string;
+  sectionNumber?: string;
+  pageNumber?: number;
+  tableNumber?: number;
+  exampleNumber?: number;
+} {
   let currentChapter: string | undefined;
+  let currentChapterHebrew: string | undefined;
+  let currentChapterNumber: string | undefined;
   let currentSection: string | undefined;
+  let currentSectionHebrew: string | undefined;
+  let currentSectionNumber: string | undefined;
+  let currentPage: number | undefined;
+  let currentTableNumber: number | undefined;
+  let currentExampleNumber: number | undefined;
   
-  // Find the most recent chapter before this position
-  for (const chapter of structure.chapters) {
-    if (chapter.startIndex <= textIndex && (!chapter.endIndex || textIndex <= chapter.endIndex)) {
+  // Find the most recent chapter before or at this position (iterate backward)
+  for (let i = structure.chapters.length - 1; i >= 0; i--) {
+    const chapter = structure.chapters[i];
+    if (chapter.startIndex <= textIndex) {
       currentChapter = chapter.title;
+      currentChapterHebrew = chapter.titleHebrew;
+      currentChapterNumber = chapter.chapterNumber;
       break;
     }
   }
   
-  // Find the most recent section before this position
-  for (const section of structure.sections) {
-    if (section.startIndex <= textIndex && (!section.endIndex || textIndex <= section.endIndex)) {
+  // Find the most recent section before or at this position (iterate backward)
+  for (let i = structure.sections.length - 1; i >= 0; i--) {
+    const section = structure.sections[i];
+    if (section.startIndex <= textIndex) {
       currentSection = section.title;
+      currentSectionHebrew = section.titleHebrew;
+      currentSectionNumber = section.sectionNumber;
       break;
     }
   }
   
-  return { chapter: currentChapter, section: currentSection };
+  // Find the current page (iterate backward)
+  for (let i = structure.pages.length - 1; i >= 0; i--) {
+    const page = structure.pages[i];
+    if (page.startIndex <= textIndex) {
+      currentPage = page.pageNumber;
+      break;
+    }
+  }
+  
+  // Find if we're inside a table (iterate backward)
+  for (let i = structure.tables.length - 1; i >= 0; i--) {
+    const table = structure.tables[i];
+    if (table.startIndex <= textIndex && (!table.endIndex || textIndex <= table.endIndex)) {
+      currentTableNumber = table.tableNumber;
+      break;
+    }
+  }
+  
+  // Find if we're inside an example
+  for (const example of structure.examples) {
+    if (example.startIndex <= textIndex && (!example.endIndex || textIndex <= example.endIndex)) {
+      currentExampleNumber = example.exampleNumber;
+      break;
+    }
+  }
+  
+  return { 
+    chapter: currentChapter,
+    chapterHebrew: currentChapterHebrew,
+    chapterNumber: currentChapterNumber,
+    section: currentSection,
+    sectionHebrew: currentSectionHebrew,
+    sectionNumber: currentSectionNumber,
+    pageNumber: currentPage,
+    tableNumber: currentTableNumber,
+    exampleNumber: currentExampleNumber
+  };
 }
 
 /**
- * Add structure information to extracted content
+ * Add enhanced structure information to extracted content with Hebrew metadata
  */
 function enrichContentWithStructure(
   extractedContent: ExtractedContent[], 
@@ -245,25 +494,90 @@ function enrichContentWithStructure(
 ): ExtractedContent[] {
   const lines = text.split('\n');
   
-  return extractedContent.map(content => {
+  console.log(`🔍 Enriching ${extractedContent.length} content items with structure metadata...`);
+  console.log(`📚 Available structure: ${structure.chapters.length} chapters, ${structure.sections.length} sections, ${structure.tables.length} tables, ${structure.examples.length} examples`);
+  
+  return extractedContent.map((content, contentIndex) => {
     // Find approximate position of this content in the original text
-    const contentStart = text.indexOf(content.text.substring(0, 50));
-    const lineIndex = contentStart >= 0 ? text.substring(0, contentStart).split('\n').length - 1 : 0;
+    // Try multiple methods to find the best match
+    let lineIndex = 0;
     
-    // Find current chapter and section
+    // Method 1: Search for the beginning of the content
+    const searchText = content.text.substring(0, Math.min(100, content.text.length));
+    const contentStart = text.indexOf(searchText);
+    if (contentStart >= 0) {
+      lineIndex = text.substring(0, contentStart).split('\n').length - 1;
+    } else {
+      // Method 2: Use proportional positioning
+      // If we can't find exact match, estimate position based on content index
+      lineIndex = Math.floor((contentIndex / extractedContent.length) * lines.length);
+    }
+    
+    // Find current chapter, section, page, table, and example
     const currentStructure = findCurrentStructure(structure, lineIndex);
     
-    // Enrich metadata with structure information
-    const enrichedMetadata = {
+    // Log what we found for debugging
+    if (contentIndex < 3) {  // Log first 3 items for debugging
+      console.log(`  Item ${contentIndex + 1}: line ${lineIndex}, chapter="${currentStructure.chapter || 'none'}", section="${currentStructure.sectionNumber || 'none'}", page=${currentStructure.pageNumber || 'none'}`);
+    }
+    
+    // Build enhanced metadata with all Hebrew information
+    const enrichedMetadata: any = {
       ...content.metadata,
-      ...(currentStructure.chapter && { chapter: currentStructure.chapter }),
-      ...(currentStructure.section && { section: currentStructure.section }),
       document_structure: {
         total_chapters: structure.chapters.length,
         total_sections: structure.sections.length,
+        total_tables: structure.tables.length,
+        total_examples: structure.examples.length,
+        total_pages: structure.pages.length,
         has_structure: structure.chapters.length > 0 || structure.sections.length > 0
       }
     };
+    
+    // Add chapter information (both English and Hebrew)
+    if (currentStructure.chapter) {
+      enrichedMetadata.chapter = currentStructure.chapter;
+    }
+    if (currentStructure.chapterHebrew) {
+      enrichedMetadata.chapter_hebrew = currentStructure.chapterHebrew;
+    }
+    if (currentStructure.chapterNumber) {
+      enrichedMetadata.chapter_number = currentStructure.chapterNumber;
+    }
+    
+    // Add section information (both English and Hebrew)
+    if (currentStructure.section) {
+      enrichedMetadata.section = currentStructure.section;
+    }
+    if (currentStructure.sectionHebrew) {
+      enrichedMetadata.section_hebrew = currentStructure.sectionHebrew;
+    }
+    if (currentStructure.sectionNumber) {
+      enrichedMetadata.section_number = currentStructure.sectionNumber;
+    }
+    
+    // Add page number
+    if (currentStructure.pageNumber) {
+      enrichedMetadata.page_number = currentStructure.pageNumber;
+    }
+    
+    // Add table number if inside a table
+    if (currentStructure.tableNumber) {
+      enrichedMetadata.table_number = currentStructure.tableNumber;
+      enrichedMetadata.is_table_content = true;
+    }
+    
+    // Add example number if inside an example
+    if (currentStructure.exampleNumber) {
+      enrichedMetadata.example_number = currentStructure.exampleNumber;
+      enrichedMetadata.is_example_content = true;
+    }
+    
+    // Add Hebrew document flag if Hebrew content detected
+    if (/[\u05D0-\u05EA]/.test(content.text)) {
+      enrichedMetadata.is_hebrew_content = true;
+      enrichedMetadata.content_language = 'hebrew';
+    }
     
     return {
       ...content,
@@ -333,23 +647,59 @@ export async function extractContent(
     console.log(`📚 Detecting document structure...`);
     const structure = detectDocumentStructure(fullText);
     
-    console.log(`📊 Structure detected: ${structure.chapters.length} chapters, ${structure.sections.length} sections`);
+    console.log(`📊 Structure detected:`);
+    console.log(`   📖 Chapters: ${structure.chapters.length}`);
+    console.log(`   📑 Sections: ${structure.sections.length}`);
+    console.log(`   📊 Tables: ${structure.tables.length}`);
+    console.log(`   💡 Examples: ${structure.examples.length}`);
+    console.log(`   📄 Pages: ${structure.pages.length}`);
     
     if (structure.chapters.length > 0) {
       console.log(`📖 Chapters found:`);
       structure.chapters.forEach((ch, i) => {
-        console.log(`   ${i + 1}. ${ch.title} (page ${ch.pageNumber})`);
+        const chapterInfo = [];
+        if (ch.chapterNumber) chapterInfo.push(`#${ch.chapterNumber}`);
+        if (ch.titleHebrew) chapterInfo.push(ch.titleHebrew);
+        if (ch.pageNumber) chapterInfo.push(`page ${ch.pageNumber}`);
+        console.log(`   ${i + 1}. ${chapterInfo.join(' | ')}`);
       });
     }
     
     if (structure.sections.length > 0) {
-      console.log(`📑 Sections found:`);
-      structure.sections.slice(0, 5).forEach((sec, i) => {
-        console.log(`   ${i + 1}. ${sec.title} ${sec.chapter ? `(in: ${sec.chapter})` : ''}`);
+      console.log(`📑 Sections found (showing first 10):`);
+      structure.sections.slice(0, 10).forEach((sec, i) => {
+        const sectionInfo = [];
+        if (sec.sectionNumber) sectionInfo.push(sec.sectionNumber);
+        if (sec.titleHebrew) sectionInfo.push(sec.titleHebrew);
+        if (sec.chapter) sectionInfo.push(`in: ${sec.chapter}`);
+        if (sec.pageNumber) sectionInfo.push(`page ${sec.pageNumber}`);
+        console.log(`   ${i + 1}. ${sectionInfo.join(' | ')}`);
       });
-      if (structure.sections.length > 5) {
-        console.log(`   ... and ${structure.sections.length - 5} more sections`);
+      if (structure.sections.length > 10) {
+        console.log(`   ... and ${structure.sections.length - 10} more sections`);
       }
+    }
+    
+    if (structure.tables.length > 0) {
+      console.log(`📊 Tables found:`);
+      structure.tables.forEach((table, i) => {
+        const tableInfo = [];
+        if (table.tableNumber) tableInfo.push(`Table ${table.tableNumber}`);
+        if (table.titleHebrew) tableInfo.push(table.titleHebrew);
+        if (table.pageNumber) tableInfo.push(`page ${table.pageNumber}`);
+        console.log(`   ${i + 1}. ${tableInfo.join(' | ')}`);
+      });
+    }
+    
+    if (structure.examples.length > 0) {
+      console.log(`💡 Examples found:`);
+      structure.examples.forEach((ex, i) => {
+        const exampleInfo = [];
+        if (ex.exampleNumber) exampleInfo.push(`Example ${ex.exampleNumber}`);
+        if (ex.titleHebrew) exampleInfo.push(ex.titleHebrew);
+        if (ex.pageNumber) exampleInfo.push(`page ${ex.pageNumber}`);
+        console.log(`   ${i + 1}. ${exampleInfo.join(' | ')}`);
+      });
     }
     
     // Enrich extracted content with structure information
@@ -900,24 +1250,27 @@ async function extractImageFileAdvanced(buffer: Buffer, filename: string): Promi
         }
       });
       
-      // Try to detect and extract table-like structures
+      // Try to detect and extract table-like structures - more conservative
       const tables = extractTablesFromOcrText(text, words || []);
       tables.forEach((table, index) => {
-        // Add Hebrew table markers for better identification
-        const markedTableText = `[טבלה/TABLE START]\n${table.text}\n[טבלה/TABLE END]`;
-        
-        extractedContent.push({
-          text: markedTableText,
-          type: 'table',
-          metadata: {
-            source_filename: filename,
-            extraction_type: 'table',
-            table_index: index,
-            ocr_confidence: table.confidence,
-            is_ocr_table: true,
-            is_hebrew_table: /[\u05D0-\u05EA]/.test(table.text)
-          }
-        });
+        // Only add tables with high confidence and clear structure
+        if (table.confidence > 70 && table.text.split('\n').length >= 4) {
+          // Add Hebrew table markers for better identification
+          const markedTableText = `[טבלה/TABLE START]\n${table.text}\n[טבלה/TABLE END]`;
+          
+          extractedContent.push({
+            text: markedTableText,
+            type: 'table',
+            metadata: {
+              source_filename: filename,
+              extraction_type: 'table',
+              table_index: index,
+              ocr_confidence: table.confidence,
+              is_ocr_table: true,
+              is_hebrew_table: /[\u05D0-\u05EA]/.test(table.text)
+            }
+          });
+        }
       });
       
       console.log(`✅ Advanced OCR completed for ${filename} (confidence: ${confidence.toFixed(1)}%, ${words?.length || 0} words)`);
@@ -1053,72 +1406,146 @@ function extractTablesFromPdfText(text: string): string[] {
   const lines = text.split('\n');
   let currentTable: string[] = [];
   let inTable = false;
+  let consecutiveTableLines = 0;
+  const MIN_TABLE_LINES = 3; // Minimum lines to consider it a real table
+  const MIN_COLUMNS = 2; // Minimum columns to consider it a table
   
   for (const line of lines) {
     const trimmedLine = line.trim();
     
-    // Enhanced table detection for Hebrew and multilingual content
-    const hasMultipleColumns = /\s{2,}/.test(trimmedLine) && trimmedLine.split(/\s{2,}/).length >= 2;
-    const hasTabSeparators = trimmedLine.includes('\t') && trimmedLine.split('\t').length >= 2;
-    const hasPipeSeparators = trimmedLine.includes('|') && trimmedLine.split('|').length >= 2;
+    // Skip empty lines
+    if (!trimmedLine) {
+      if (inTable && consecutiveTableLines >= MIN_TABLE_LINES) {
+        // End current table if we have enough lines
+        const tableText = currentTable.join('\n');
+        const cleanedTable = cleanHebrewTableText(tableText);
+        
+        // Validate it's actually a table before adding
+        if (isValidTable(cleanedTable)) {
+          const markedTable = `[טבלה/TABLE START]\n${cleanedTable}\n[טבלה/TABLE END]`;
+          tables.push(markedTable);
+        }
+      }
+      inTable = false;
+      currentTable = [];
+      consecutiveTableLines = 0;
+      continue;
+    }
     
-    // Hebrew-specific table patterns
-    const hasHebrewNumbers = /[\u05D0-\u05EA].*\d|\d.*[\u05D0-\u05EA]/.test(trimmedLine);
-    const hasCurrency = /[₪$€£¥]/.test(trimmedLine);
+    // Enhanced table detection - more strict criteria
+    const hasTabSeparators = trimmedLine.includes('\t') && trimmedLine.split('\t').length >= MIN_COLUMNS;
+    const hasPipeSeparators = trimmedLine.includes('|') && trimmedLine.split('|').filter(cell => cell.trim()).length >= MIN_COLUMNS;
+    
+    // Multiple spaces pattern - but more strict
+    const spaceColumns = trimmedLine.split(/\s{3,}/).filter(col => col.trim());
+    const hasMultipleSpaces = spaceColumns.length >= MIN_COLUMNS;
+    
+    // Hebrew-specific table patterns - more conservative
+    const hasHebrewNumbers = /[\u05D0-\u05EA].*\d.*[\u05D0-\u05EA]|\d.*[\u05D0-\u05EA].*\d/.test(trimmedLine);
+    const hasCurrency = /\d+[₪$€£¥]|[₪$€£¥]\d+/.test(trimmedLine);
     const hasHebrewTableWords = /[\u05D0-\u05EA].*(סכום|מחיר|כמות|תאריך|שם|מספר|סה״כ|סהכ|ח״מ|חמ|ת״ז|תז|קוד|רשימה|פירוט|תיאור|טבלה|נתונים|דוח|סטטיסטיקה)/.test(trimmedLine);
     
-    // Mixed content patterns (Hebrew + English/Numbers)
-    const hasMixedContent = /[\u05D0-\u05EA].*[a-zA-Z0-9]|[a-zA-Z0-9].*[\u05D0-\u05EA]/.test(trimmedLine);
+    // Date and percentage patterns - more specific
+    const hasDatePatterns = /\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4}/.test(trimmedLine);
+    const hasPercentages = /\d+%/.test(trimmedLine);
     
-    // Date and percentage patterns
-    const hasDatePatterns = /\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4}|\d{1,2}\s+(ינו|פבר|מרץ|אפר|מאי|יונ|יול|אוג|ספט|אוק|נוב|דצמ)/.test(trimmedLine);
-    const hasPercentages = /\d+%|אחוז/.test(trimmedLine);
+    // Structured data pattern - numbers with text in organized format
+    const hasStructuredData = /^\s*\d+[\.\)]\s+/.test(trimmedLine) || // Numbered lists
+                             /^\s*[א-ת]+\s+\d+/.test(trimmedLine) || // Hebrew word + number
+                             /^\s*\d+\s+[א-ת]+/.test(trimmedLine);   // Number + Hebrew word
     
-    // Enhanced Hebrew table structure detection
-    const hasHebrewStructure = /[\u05D0-\u05EA]+\s+\d+|\d+\s+[\u05D0-\u05EA]+/.test(trimmedLine);
-    const hasMultipleHebrewWords = (trimmedLine.match(/[\u05D0-\u05EA]+/g) || []).length >= 2;
+    // Table header patterns
+    const hasTableHeaders = /^[\u05D0-\u05EA\s]+\|[\u05D0-\u05EA\s]+\|/.test(trimmedLine) || 
+                           /^[\u05D0-\u05EA\s]+\s{3,}[\u05D0-\u05EA\s]+\s{3,}/.test(trimmedLine);
     
-    // Hebrew table header patterns
-    const hasHebrewTableHeaders = /^[\u05D0-\u05EA\s]+\|[\u05D0-\u05EA\s]+\|/.test(trimmedLine) || 
-                                 /^[\u05D0-\u05EA\s]+\s{2,}[\u05D0-\u05EA\s]+\s{2,}/.test(trimmedLine);
+    // Check for table-like structure - require multiple criteria
+    const tableIndicators = [
+      hasTabSeparators,
+      hasPipeSeparators,
+      hasMultipleSpaces,
+      hasTableHeaders,
+      (hasCurrency && (hasHebrewNumbers || hasStructuredData)),
+      (hasHebrewTableWords && (hasDatePatterns || hasPercentages || hasCurrency)),
+      (hasDatePatterns && hasPercentages),
+      (hasStructuredData && (hasCurrency || hasHebrewTableWords))
+    ];
     
-    // Check for table-like structure
-    const isTableLike = hasMultipleColumns || hasTabSeparators || hasPipeSeparators || 
-                       (hasMixedContent && (hasHebrewNumbers || hasCurrency || hasHebrewTableWords)) ||
-                       hasDatePatterns || hasPercentages || hasHebrewStructure ||
-                       (hasMultipleHebrewWords && (hasNumbers(trimmedLine) || hasCurrency)) ||
-                       hasHebrewTableHeaders;
+    const indicatorCount = tableIndicators.filter(Boolean).length;
+    const isTableLike = indicatorCount >= 2 || hasTabSeparators || hasPipeSeparators || hasTableHeaders;
     
     if (isTableLike) {
       if (!inTable) {
         inTable = true;
         currentTable = [];
+        consecutiveTableLines = 0;
       }
       currentTable.push(trimmedLine);
+      consecutiveTableLines++;
     } else {
-      if (inTable && currentTable.length >= 2) {
-        // Clean and format the table text for Hebrew content
+      if (inTable && consecutiveTableLines >= MIN_TABLE_LINES) {
+        // End current table if we have enough lines
         const tableText = currentTable.join('\n');
         const cleanedTable = cleanHebrewTableText(tableText);
         
-        // Add table markers for better identification
-        const markedTable = `[טבלה/TABLE START]\n${cleanedTable}\n[טבלה/TABLE END]`;
-        tables.push(markedTable);
+        // Validate it's actually a table before adding
+        if (isValidTable(cleanedTable)) {
+          const markedTable = `[טבלה/TABLE START]\n${cleanedTable}\n[טבלה/TABLE END]`;
+          tables.push(markedTable);
+        }
       }
       inTable = false;
       currentTable = [];
+      consecutiveTableLines = 0;
     }
   }
   
   // Handle table at end of text
-  if (inTable && currentTable.length >= 2) {
+  if (inTable && consecutiveTableLines >= MIN_TABLE_LINES) {
     const tableText = currentTable.join('\n');
     const cleanedTable = cleanHebrewTableText(tableText);
-    const markedTable = `[טבלה/TABLE START]\n${cleanedTable}\n[טבלה/TABLE END]`;
-    tables.push(markedTable);
+    
+    if (isValidTable(cleanedTable)) {
+      const markedTable = `[טבלה/TABLE START]\n${cleanedTable}\n[טבלה/TABLE END]`;
+      tables.push(markedTable);
+    }
   }
   
   return tables;
+}
+
+// Helper function to validate if extracted content is actually a table
+function isValidTable(tableText: string): boolean {
+  const lines = tableText.split('\n').filter(line => line.trim());
+  
+  if (lines.length < 3) return false; // Need at least 3 lines
+  
+  // Check if lines have consistent column structure
+  let columnCounts: number[] = [];
+  
+  for (const line of lines) {
+    let columns = 0;
+    
+    if (line.includes('\t')) {
+      columns = line.split('\t').filter(col => col.trim()).length;
+    } else if (line.includes('|')) {
+      columns = line.split('|').filter(col => col.trim()).length;
+    } else {
+      columns = line.split(/\s{3,}/).filter(col => col.trim()).length;
+    }
+    
+    if (columns >= 2) {
+      columnCounts.push(columns);
+    }
+  }
+  
+  // Need at least 70% of lines to have consistent column count
+  if (columnCounts.length < lines.length * 0.7) return false;
+  
+  // Check for column consistency
+  const avgColumns = columnCounts.reduce((a, b) => a + b, 0) / columnCounts.length;
+  const consistentColumns = columnCounts.filter(count => Math.abs(count - avgColumns) <= 1);
+  
+  return consistentColumns.length >= columnCounts.length * 0.7;
 }
 
 // Helper function to check if text contains numbers
@@ -1188,11 +1615,11 @@ function extractTablesFromOcrText(text: string, words: any[]): Array<{text: stri
         }
         tableLines.push(sortedWords);
       } else {
-        if (inTable && tableLines.length >= 2) {
+        if (inTable && tableLines.length >= 4) { // Increased from 2 to 4 lines minimum
           const tableText = convertWordsToTableText(tableLines);
           const avgConfidence = calculateAverageConfidence(tableLines);
           
-          if (tableText.trim()) {
+          if (tableText.trim() && avgConfidence > 60) { // Increased confidence threshold
             tables.push({
               text: tableText,
               confidence: avgConfidence
@@ -1205,11 +1632,11 @@ function extractTablesFromOcrText(text: string, words: any[]): Array<{text: stri
     }
     
     // Handle table at end of document
-    if (inTable && tableLines.length >= 2) {
+    if (inTable && tableLines.length >= 4) { // Increased from 2 to 4 lines minimum
       const tableText = convertWordsToTableText(tableLines);
       const avgConfidence = calculateAverageConfidence(tableLines);
       
-      if (tableText.trim()) {
+      if (tableText.trim() && avgConfidence > 60) { // Increased confidence threshold
         tables.push({
           text: tableText,
           confidence: avgConfidence
@@ -1226,51 +1653,60 @@ function extractTablesFromOcrText(text: string, words: any[]): Array<{text: stri
 
 // Enhanced table row detection for multilingual content
 function isLikelyTableRow(words: any[]): boolean {
-  if (words.length < 2) return false;
+  if (words.length < 3) return false; // Need at least 3 words for a table row
   
-  // Check for regular spacing patterns
-  const hasRegularSpacingPattern = words.length >= 3 && checkRegularSpacing(words);
+  // Check for regular spacing patterns - more strict
+  const hasRegularSpacingPattern = words.length >= 4 && checkRegularSpacing(words);
   
   // Check for numeric content (common in tables)
-  const hasNumbers = words.some(word => /\d/.test(word.text));
+  const numberCount = words.filter(word => /\d/.test(word.text)).length;
+  const hasSignificantNumbers = numberCount >= 2; // Need at least 2 numbers
   
   // Check for common table separators or patterns
   const hasSeparators = words.some(word => /[|│┃┆┇┊┋]/.test(word.text));
   
   // Check for aligned content (similar x-positions across rows)
-  const hasAlignment = words.length >= 2;
+  const hasAlignment = words.length >= 3;
   
-  // Hebrew/RTL specific patterns
-  const hasHebrewNumbers = words.some(word => /[\u05D0-\u05EA].*\d|\d.*[\u05D0-\u05EA]/.test(word.text));
+  // Hebrew/RTL specific patterns - more conservative
+  const hebrewWords = words.filter(word => /[\u05D0-\u05EA]/.test(word.text));
+  const hasHebrewNumbers = words.some(word => /[\u05D0-\u05EA].*\d.*[\u05D0-\u05EA]|\d.*[\u05D0-\u05EA].*\d/.test(word.text));
   
   // Currency symbols common in Hebrew tables
   const hasCurrency = words.some(word => /[₪$€£¥]/.test(word.text));
   
-  // Hebrew table keywords
+  // Hebrew table keywords - more specific
   const hasHebrewTableKeywords = words.some(word => 
-    /סכום|מחיר|כמות|תאריך|שם|מספר|סה״כ|סהכ|ח״מ|חמ|ת״ז|תז|קוד|רשימה|פירוט|תיאור/.test(word.text)
+    /^(סכום|מחיר|כמות|תאריך|שם|מספר|סה״כ|סהכ|ח״מ|חמ|ת״ז|תז|קוד)$/.test(word.text)
   );
   
   // Date patterns (Hebrew and international)
   const hasDatePatterns = words.some(word => 
-    /\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4}|\d{1,2}\s+(ינו|פבר|מרץ|אפר|מאי|יונ|יול|אוג|ספט|אוק|נוב|דצמ)/.test(word.text)
+    /^\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4}$/.test(word.text)
   );
   
   // Percentage patterns
-  const hasPercentages = words.some(word => /\d+%|אחוז/.test(word.text));
+  const hasPercentages = words.some(word => /^\d+%$/.test(word.text));
   
-  return hasRegularSpacingPattern || 
-         (hasNumbers && hasAlignment) || 
-         hasSeparators || 
-         hasHebrewNumbers || 
-         hasCurrency || 
-         hasHebrewTableKeywords ||
-         hasDatePatterns ||
-         hasPercentages;
+  // Require multiple strong indicators for table detection
+  const strongIndicators = [
+    hasRegularSpacingPattern,
+    hasSeparators,
+    hasHebrewTableKeywords,
+    hasDatePatterns,
+    hasPercentages,
+    (hasCurrency && hasSignificantNumbers),
+    (hasHebrewNumbers && hebrewWords.length >= 2)
+  ];
+  
+  const strongCount = strongIndicators.filter(Boolean).length;
+  
+  // Need at least 2 strong indicators or very clear separators
+  return strongCount >= 2 || hasSeparators || hasRegularSpacingPattern;
 }
 
 function checkRegularSpacing(words: any[]): boolean {
-  if (words.length < 3) return false;
+  if (words.length < 4) return false; // Need at least 4 words for regular spacing
   
   const gaps = [];
   for (let i = 1; i < words.length; i++) {
@@ -1278,9 +1714,10 @@ function checkRegularSpacing(words: any[]): boolean {
   }
   
   const avgGap = gaps.reduce((a, b) => a + b, 0) / gaps.length;
-  const hasLargeGaps = gaps.some(gap => gap > 20);
+  const hasLargeGaps = gaps.filter(gap => gap > 30).length >= gaps.length * 0.6; // 60% should have large gaps
+  const hasConsistentGaps = gaps.filter(gap => Math.abs(gap - avgGap) < avgGap * 0.3).length >= gaps.length * 0.7; // 70% should be consistent
   
-  return hasLargeGaps && avgGap > 15;
+  return hasLargeGaps && hasConsistentGaps && avgGap > 25;
 }
 
 function convertWordsToTableText(tableLines: any[][]): string {
