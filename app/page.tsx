@@ -96,8 +96,15 @@ export default function Home() {
 
     setIsLoading(true);
     setUploadProgress('Reading file...');
+    setUploadResult(null);
 
     try {
+      // Check file size before processing (50MB limit for Vercel)
+      const maxSize = 50 * 1024 * 1024; // 50MB
+      if (selectedFile.size > maxSize) {
+        throw new Error(`File size (${(selectedFile.size / 1024 / 1024).toFixed(2)}MB) exceeds 50MB limit for serverless deployment`);
+      }
+
       // Convert file to base64
       const fileBuffer = await selectedFile.arrayBuffer();
       const base64Content = Buffer.from(fileBuffer).toString('base64');
@@ -115,22 +122,69 @@ export default function Home() {
         chunk_overlap: 50
       };
 
-      const response = await fetch('/api/upload', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(uploadRequest)
-      });
+      // Add timeout to the fetch request
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 28000); // 28 seconds timeout
 
-      if (response.ok) {
-        const result = await response.json();
+      try {
+        const response = await fetch('/api/upload', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(uploadRequest),
+          signal: controller.signal
+        });
+
+        clearTimeout(timeoutId);
+
+        // Check if response is ok
+        if (!response.ok) {
+          let errorMessage = 'Upload failed';
+          try {
+            const errorResult = await response.json();
+            errorMessage = errorResult.error || `HTTP ${response.status}: ${response.statusText}`;
+          } catch (jsonError) {
+            // If JSON parsing fails, use status text
+            errorMessage = `HTTP ${response.status}: ${response.statusText}`;
+          }
+          throw new Error(errorMessage);
+        }
+
+        // Try to parse JSON response
+        let result;
+        try {
+          result = await response.json();
+        } catch (jsonError) {
+          throw new Error('Server returned invalid response. The upload may have timed out or failed.');
+        }
+
         setUploadResult(result);
         setUploadProgress('Upload completed successfully!');
-      } else {
-        const errorResult = await response.json();
-        throw new Error(errorResult.error || 'Upload failed');
+        
+      } catch (fetchError) {
+        clearTimeout(timeoutId);
+        
+        if (fetchError instanceof Error) {
+          if (fetchError.name === 'AbortError') {
+            throw new Error('Upload timed out. Try uploading a smaller file or simpler document format.');
+          }
+          throw fetchError;
+        }
+        throw new Error('Network error occurred during upload');
       }
+
     } catch (error) {
-      setUploadProgress(`Upload failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      console.error('Upload error:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
+      setUploadProgress(`Upload failed: ${errorMessage}`);
+      
+      // Show helpful suggestions based on error type
+      if (errorMessage.includes('timeout') || errorMessage.includes('timed out')) {
+        setUploadProgress(prev => prev + '\n\nSuggestions:\n• Try a smaller file (under 10MB)\n• Use simpler formats (TXT, PDF without images)\n• Split large documents into smaller parts');
+      } else if (errorMessage.includes('size') || errorMessage.includes('50MB')) {
+        setUploadProgress(prev => prev + '\n\nTip: For large files, try splitting them into smaller documents or use a simpler format.');
+      } else if (errorMessage.includes('JSON') || errorMessage.includes('invalid response')) {
+        setUploadProgress(prev => prev + '\n\nThe server may be overloaded. Please try again in a few moments.');
+      }
     } finally {
       setIsLoading(false);
     }

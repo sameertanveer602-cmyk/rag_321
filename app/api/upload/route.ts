@@ -28,8 +28,19 @@ import { UploadRequest, UploadResponse, SupportedMimeType } from '@/lib/types';
 export async function POST(request: NextRequest) {
   console.log('📤 Document upload request received');
   
+  // Add timeout protection for Vercel deployment
+  const startTime = Date.now();
+  const TIMEOUT_MS = 25000; // 25 seconds (Vercel hobby plan limit is 30s)
+  
+  const timeoutCheck = () => {
+    if (Date.now() - startTime > TIMEOUT_MS) {
+      throw new Error('Processing timeout - file too large or complex for serverless environment');
+    }
+  };
+  
   try {
-    // Parse and validate request
+    // Parse and validate request with timeout check
+    timeoutCheck();
     const body: UploadRequest = await request.json();
     const { 
       filename, 
@@ -50,7 +61,8 @@ export async function POST(request: NextRequest) {
     console.log(`📄 Processing file: ${filename}`);
     console.log(`⚙️  Chunk size: ${chunk_size}, overlap: ${chunk_overlap}`);
     
-    // Decode base64 content
+    // Decode base64 content with timeout check
+    timeoutCheck();
     let fileBuffer: Buffer;
     try {
       fileBuffer = Buffer.from(content, 'base64');
@@ -61,10 +73,10 @@ export async function POST(request: NextRequest) {
       );
     }
     
-    // Validate file size (100MB limit)
-    if (!validateFileSize(fileBuffer, 100)) {
+    // Validate file size (reduce limit for Vercel to 50MB)
+    if (!validateFileSize(fileBuffer, 50)) {
       return NextResponse.json(
-        { error: 'File size exceeds 100MB limit', code: 'FILE_TOO_LARGE' },
+        { error: 'File size exceeds 50MB limit for serverless deployment', code: 'FILE_TOO_LARGE' },
         { status: 413 }
       );
     }
@@ -84,28 +96,62 @@ export async function POST(request: NextRequest) {
     const docId = metadata?.doc_id || `doc_${uuidv4()}`;
     
     // STEP 1: Upload raw file to Supabase Storage
+    timeoutCheck();
     console.log('☁️  Uploading file to Supabase Storage...');
     const filePath = await uploadFile(filename, fileBuffer, mimeType);
     console.log(`✅ File uploaded to: ${filePath}`);
     
-    // STEP 2: Extract content from file
+    // STEP 2: Extract content from file with timeout protection
+    timeoutCheck();
     console.log('🔍 Extracting content from file...');
-    const extractedContent = await extractContent(fileBuffer, filename, mimeType as SupportedMimeType);
+    
+    let extractedContent;
+    try {
+      extractedContent = await Promise.race([
+        extractContent(fileBuffer, filename, mimeType as SupportedMimeType),
+        new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('Content extraction timeout')), 15000)
+        )
+      ]) as any;
+    } catch (error) {
+      console.error('❌ Content extraction failed or timed out:', error);
+      return NextResponse.json(
+        { 
+          error: 'Content extraction failed or timed out. Try a smaller file or simpler format.',
+          code: 'EXTRACTION_TIMEOUT'
+        },
+        { status: 408 }
+      );
+    }
+    
     console.log(`✅ Extracted ${extractedContent.length} content elements`);
     
     // Log extraction summary
-    const extractionSummary = extractedContent.reduce((acc, content) => {
+    const extractionSummary = extractedContent.reduce((acc: any, content: any) => {
       acc[content.type] = (acc[content.type] || 0) + 1;
       return acc;
     }, {} as Record<string, number>);
     console.log('📊 Extraction summary:', extractionSummary);
     
     // STEP 3: Chunk content using LangChain
+    timeoutCheck();
     console.log('✂️  Chunking content...');
     const chunks = await chunkContent(extractedContent, chunk_size, chunk_overlap);
     console.log(`✅ Created ${chunks.length} chunks`);
     
+    // Check if we have too many chunks for serverless processing
+    if (chunks.length > 100) {
+      return NextResponse.json(
+        { 
+          error: `Document too large: ${chunks.length} chunks created. Maximum 100 chunks allowed for serverless deployment.`,
+          code: 'TOO_MANY_CHUNKS'
+        },
+        { status: 413 }
+      );
+    }
+    
     // STEP 4: Store document metadata in database
+    timeoutCheck();
     console.log('💾 Storing document metadata...');
     const { data: documentData, error: documentError } = await supabaseAdmin
       .from('documents')
@@ -128,14 +174,46 @@ export async function POST(request: NextRequest) {
     
     if (documentError) {
       console.error('❌ Failed to store document metadata:', documentError);
-      throw new Error(`Database error: ${documentError.message}`);
+      return NextResponse.json(
+        { 
+          error: `Database error: ${documentError.message}`,
+          code: 'DATABASE_ERROR'
+        },
+        { status: 500 }
+      );
     }
     
     console.log(`✅ Document metadata stored with ID: ${documentData.id}`);
     
-    // STEP 5: Process embeddings and store chunks (individual processing)
+    // STEP 5: Process embeddings and store chunks with timeout protection
+    timeoutCheck();
     console.log('🧠 Processing embeddings and storing chunks...');
-    await storeDocumentsWithEmbeddings(chunks, documentData.id); // Pass UUID, not doc_id string
+    
+    try {
+      await Promise.race([
+        storeDocumentsWithEmbeddings(chunks, documentData.id),
+        new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('Embedding processing timeout')), 20000)
+        )
+      ]);
+    } catch (error) {
+      console.error('❌ Embedding processing failed or timed out:', error);
+      
+      // Clean up document record if embedding fails
+      await supabaseAdmin
+        .from('documents')
+        .delete()
+        .eq('id', documentData.id);
+      
+      return NextResponse.json(
+        { 
+          error: 'Embedding processing failed or timed out. Try a smaller document or contact support.',
+          code: 'EMBEDDING_TIMEOUT'
+        },
+        { status: 408 }
+      );
+    }
+    
     console.log('✅ All chunks processed and stored with embeddings');
     
     // Build response
@@ -145,18 +223,26 @@ export async function POST(request: NextRequest) {
       doc_id: docId
     };
     
-    console.log(`🎉 Upload completed successfully: ${chunks.length} chunks processed`);
+    const processingTime = Date.now() - startTime;
+    console.log(`🎉 Upload completed successfully: ${chunks.length} chunks processed in ${processingTime}ms`);
+    
     return NextResponse.json(response);
     
   } catch (error) {
     console.error('❌ Upload processing failed:', error);
     
+    // Ensure we always return valid JSON
+    const errorMessage = error instanceof Error ? error.message : 'Upload processing failed';
+    const errorCode = errorMessage.includes('timeout') ? 'TIMEOUT_ERROR' : 'PROCESSING_ERROR';
+    const statusCode = errorMessage.includes('timeout') ? 408 : 500;
+    
     return NextResponse.json(
       { 
-        error: error instanceof Error ? error.message : 'Upload processing failed',
-        code: 'PROCESSING_ERROR'
+        error: errorMessage,
+        code: errorCode,
+        timestamp: new Date().toISOString()
       },
-      { status: 500 }
+      { status: statusCode }
     );
   }
 }

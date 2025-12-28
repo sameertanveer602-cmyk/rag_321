@@ -1,13 +1,24 @@
 {
   "functions": {
     "app/api/upload/route.ts": {
-      "maxDuration": 300
+      "maxDuration": 30
     },
     "app/api/rag-search/route.ts": {
-      "maxDuration": 60
+      "maxDuration": 30
     },
     "app/api/chat/route.ts": {
-      "maxDuration": 60
+      "maxDuration": 30
     }
-  }
+  },
+  "headers": [
+    {
+      "source": "/api/(.*)",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "no-cache, no-store, must-revalidate"
+        }
+      ]
+    }
+  ]
 }
