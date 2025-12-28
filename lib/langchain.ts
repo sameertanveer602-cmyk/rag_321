@@ -535,44 +535,79 @@ export async function generateRAGResponse(
 MULTILINGUAL INSTRUCTIONS:
 ${languageInstructions}
 
+CRITICAL OUTPUT FORMAT REQUIREMENTS:
+- ALWAYS respond in well-structured HTML format
+- Use proper HTML tags for headings, paragraphs, lists, and tables
+- Structure your response with clear hierarchy using h1, h2, h3 tags
+- Use semantic HTML elements for better formatting
+
 GENERAL INSTRUCTIONS:
 - Answer the question using ONLY the information provided in the sources below
 - Be precise and factual - do not hallucinate or add information not in the sources
 - When citing sources, ALWAYS include chapter and section information when available
-- Use this format for citations: [Source N: Chapter "Chapter Name", Section "Section Name"]
-- If no chapter/section info is available, use: [Source N]
-- If the sources contain tables, preserve the table structure in your response
+- Use this format for citations: <cite>[Source N: Chapter "Chapter Name", Section "Section Name"]</cite>
+- If no chapter/section info is available, use: <cite>[Source N]</cite>
+- If the sources contain tables, preserve the table structure using proper HTML table tags
 - If the sources contain OCR text from images, reference it appropriately
 - If the sources don't contain sufficient information to answer the question, say so clearly
 - Organize your response by chapter and section when multiple sources span different parts of the document
-- When presenting table data, ALWAYS format it as a proper markdown table with headers and separators
-- NEVER summarize table content - show the complete table structure with all rows and columns
-- Preserve exact text and numerical values from the source document in table format
 
 ${hasTableContent || hasHebrewTableContent ? `
-CRITICAL TABLE FORMATTING REQUIREMENTS:
-- When table data is found in sources, ALWAYS present it in full markdown table format
-- Use proper table headers with alignment separators (|---|---|---|)
+CRITICAL HTML TABLE FORMATTING REQUIREMENTS:
+- When table data is found in sources, ALWAYS present it using proper HTML table format
+- Use <table class="data-table">, <thead>, <tbody>, <tr>, <th>, <td> tags
+- Add table captions using <caption> tag when appropriate
 - Show ALL rows from the source table - do not truncate or summarize
 - Maintain exact column structure and content as it appears in the document
 - For Hebrew tables, preserve Hebrew text, currency symbols (₪), and numerical values exactly
-- Include table markers [טבלה/TABLE START] and [טבלה/TABLE END] when present in source
-- Format example:
-  | Column 1 | Column 2 | Column 3 |
-  |----------|----------|----------|
-  | Value 1  | Value 2  | Value 3  |
-  | Value 4  | Value 5  | Value 6  |
-- If source contains multiple tables, show each table separately with clear labels
+- Include table markers as comments when present in source: <!-- Hebrew Table Start --> <!-- Hebrew Table End -->
+- HTML Table format example:
+  <table class="data-table">
+    <caption>Table Title (if available)</caption>
+    <thead>
+      <tr>
+        <th>Column 1</th>
+        <th>Column 2</th>
+        <th>Column 3</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Value 1</td>
+        <td>Value 2</td>
+        <td>Value 3</td>
+      </tr>
+      <tr>
+        <td>Value 4</td>
+        <td>Value 5</td>
+        <td>Value 6</td>
+      </tr>
+    </tbody>
+  </table>
+- If source contains multiple tables, show each table separately with clear headings
 - Preserve original language of table headers and content
-- Do NOT convert tables to prose or bullet points - always use table format
+- Do NOT convert tables to prose or bullet points - always use HTML table format
+- For Hebrew content, add dir="rtl" attribute to appropriate elements
 ` : ''}
+
+HTML STRUCTURE REQUIREMENTS:
+- Start with <h1> for main topic/answer
+- Use <h2> for major sections
+- Use <h3> for subsections
+- Use <p> for paragraphs
+- Use <ul>/<ol> and <li> for lists
+- Use <strong> for emphasis
+- Use <em> for italics
+- Use <blockquote> for quotes from sources
+- Use <div class="source-section"> to group content by source
+- Use <div class="chapter-section"> to group content by chapter/section
 
 RETRIEVED SOURCES:
 ${context}
 
 QUESTION: ${query}
 
-ANSWER:`;
+HTML ANSWER:`;
 
   try {
     const response = await llm.invoke(prompt);
@@ -694,6 +729,12 @@ export async function generateChatResponse(
 MULTILINGUAL INSTRUCTIONS:
 ${languageInstructions}
 
+CRITICAL OUTPUT FORMAT REQUIREMENTS:
+- ALWAYS respond in well-structured HTML format
+- Use proper HTML tags for headings, paragraphs, lists, and tables
+- Structure your response with clear hierarchy using h1, h2, h3 tags
+- Use semantic HTML elements for better formatting
+
 GENERAL INSTRUCTIONS:
 - Answer based on the retrieved sources and conversation context
 - Be conversational but accurate - don't hallucinate
@@ -701,34 +742,58 @@ GENERAL INSTRUCTIONS:
 - Use natural language for citations like "According to Chapter X, Section Y..." or "As mentioned in the [Chapter Name] section..."
 - Consider the conversation history for context
 - Organize information by document structure when helpful
-- When presenting table data, ALWAYS format it as a proper markdown table with headers and separators
-- NEVER summarize table content - show the complete table structure with all rows and columns
-- Preserve exact text and numerical values from the source document in table format
+- Format citations as: <cite>According to Chapter X, Section Y...</cite>
 
 ${isTableQuery || hasTableContent || hasHebrewTableContent ? `
-CRITICAL TABLE FORMATTING REQUIREMENTS:
-- When table data is found in sources, ALWAYS present it in full markdown table format
-- Use proper table headers with alignment separators (|---|---|---|)
+CRITICAL HTML TABLE FORMATTING REQUIREMENTS:
+- When table data is found in sources, ALWAYS present it using proper HTML table format
+- Use <table class="data-table">, <thead>, <tbody>, <tr>, <th>, <td> tags
+- Add table captions using <caption> tag when appropriate
 - Show ALL rows from the source table - do not truncate or summarize
 - Maintain exact column structure and content as it appears in the document
 - For Hebrew tables, preserve Hebrew text, currency symbols (₪), and numerical values exactly
-- Include table markers [טבלה/TABLE START] and [טבלה/TABLE END] when present in source
-- Format example:
-  | Column 1 | Column 2 | Column 3 |
-  |----------|----------|----------|
-  | Value 1  | Value 2  | Value 3  |
-  | Value 4  | Value 5  | Value 6  |
-- If source contains multiple tables, show each table separately with clear labels
+- Include table markers as comments when present in source: <!-- Hebrew Table Start --> <!-- Hebrew Table End -->
+- HTML Table format example:
+  <table class="data-table">
+    <caption>Table Title (if available)</caption>
+    <thead>
+      <tr>
+        <th>Column 1</th>
+        <th>Column 2</th>
+        <th>Column 3</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Value 1</td>
+        <td>Value 2</td>
+        <td>Value 3</td>
+      </tr>
+    </tbody>
+  </table>
+- If source contains multiple tables, show each table separately with clear headings
 - Preserve original language of table headers and content
-- Do NOT convert tables to prose or bullet points - always use table format
+- Do NOT convert tables to prose or bullet points - always use HTML table format
+- For Hebrew content, add dir="rtl" attribute to appropriate table cells
 ` : ''}
+
+HTML STRUCTURE REQUIREMENTS:
+- Use <h2> for main sections (don't use h1 in chat responses)
+- Use <h3> for subsections
+- Use <p> for paragraphs
+- Use <ul>/<ol> and <li> for lists
+- Use <strong> for emphasis
+- Use <em> for italics
+- Use <blockquote> for quotes from sources
+- Use <div class="source-section"> to group content by source
+- Use <div class="chapter-section"> to group content by chapter/section
 
 ${historyText ? `CONVERSATION HISTORY:\n${historyText}\n\n` : ''}RETRIEVED SOURCES:
 ${context}
 
 CURRENT QUESTION: ${query}
 
-RESPONSE:`;
+HTML RESPONSE:`;
 
   try {
     const response = await llm.invoke(prompt);
@@ -1018,26 +1083,57 @@ HEBREW TABLE SPECIFIC INSTRUCTIONS:
 - When presenting Hebrew table data, maintain the original Hebrew text and numbers exactly as they appear
 - Preserve Hebrew currency symbols (₪) and their positioning relative to numbers
 - Keep Hebrew column headers in Hebrew with English translations in parentheses when helpful
-- Maintain right-to-left text flow for Hebrew content within tables
-- Use clear markdown table formatting with proper column alignment
+- Use HTML table format with proper RTL support: <table class="data-table hebrew-table" dir="rtl">
+- Add dir="rtl" attribute to table cells containing Hebrew text
+- Use clear HTML table structure with proper thead, tbody, th, td tags
 - When Hebrew tables contain mixed Hebrew-English content, preserve both languages as they appear
 - For Hebrew business/financial terms, keep the Hebrew term and provide English translation: "סכום (Total Amount)"
 - Preserve Hebrew abbreviations like ח״מ, ת״ז, סה״כ exactly as they appear
 - When explaining table content, use Hebrew financial/business terminology when it appears in the source
-- Always include table markers [טבלה/TABLE START] and [טבלה/TABLE END] when they exist in the source
-- Format Hebrew tables with clear structure:
+- Always include HTML comments for table markers: <!-- טבלה/TABLE START --> <!-- טבלה/TABLE END -->
+- Format Hebrew tables with clear HTML structure:
 
-Example Hebrew table format:
-| שם המוצר (Product Name) | מחיר (Price) | כמות (Quantity) | סה״כ (Total) |
-|------------------------|-------------|----------------|-------------|
-| מוצר א                  | 100₪       | 5              | 500₪       |
-| מוצר ב                  | 250₪       | 2              | 500₪       |
-| **סה״כ (Grand Total)**  |             |                | **1,000₪** |
+Example Hebrew HTML table format:
+<!-- טבלה/TABLE START -->
+<table class="data-table hebrew-table" dir="rtl">
+  <caption>כותרת הטבלה (Table Title)</caption>
+  <thead>
+    <tr>
+      <th dir="rtl">שם המוצר (Product Name)</th>
+      <th dir="rtl">מחיר (Price)</th>
+      <th dir="rtl">כמות (Quantity)</th>
+      <th dir="rtl">סה״כ (Total)</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td dir="rtl">מוצר א</td>
+      <td dir="rtl">100₪</td>
+      <td dir="rtl">5</td>
+      <td dir="rtl"><strong>500₪</strong></td>
+    </tr>
+    <tr>
+      <td dir="rtl">מוצר ב</td>
+      <td dir="rtl">250₪</td>
+      <td dir="rtl">2</td>
+      <td dir="rtl"><strong>500₪</strong></td>
+    </tr>
+    <tr class="total-row">
+      <td dir="rtl"><strong>סה״כ (Grand Total)</strong></td>
+      <td dir="rtl"></td>
+      <td dir="rtl"></td>
+      <td dir="rtl"><strong>1,000₪</strong></td>
+    </tr>
+  </tbody>
+</table>
+<!-- טבלה/TABLE END -->
 
-- When Hebrew tables are detected (marked with Hebrew table markers), ALWAYS present them in full table format
+- When Hebrew tables are detected (marked with Hebrew table markers), ALWAYS present them in full HTML table format
 - Do not summarize Hebrew table content - show the complete table structure
-- Ensure Hebrew text direction is preserved in table cells
-- When numbers and Hebrew text are mixed in cells, maintain their original spacing and order`;
+- Ensure Hebrew text direction is preserved in table cells with dir="rtl" attributes
+- When numbers and Hebrew text are mixed in cells, maintain their original spacing and order
+- Use <strong> tags for totals and important values
+- Add CSS classes for styling: "hebrew-table", "total-row", "currency", "number"`;
   }
   
   return instructions;

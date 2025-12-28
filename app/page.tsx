@@ -285,6 +285,16 @@ export default function Home() {
     setSessionId(null);
   };
 
+  const openFormattedResponse = (content: string, title: string) => {
+    // Encode the HTML content to pass it safely in URL
+    const encodedContent = btoa(encodeURIComponent(content));
+    const encodedTitle = encodeURIComponent(title);
+    
+    // Open in new window/tab
+    const url = `/response?content=${encodedContent}&title=${encodedTitle}`;
+    window.open(url, '_blank');
+  };
+
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
@@ -431,7 +441,15 @@ export default function Home() {
                   <div className="space-y-4">
                     {/* Answer */}
                     <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg">
-                      <h3 className="font-medium text-blue-800 mb-2">🤖 AI Answer</h3>
+                      <div className="flex justify-between items-start mb-2">
+                        <h3 className="font-medium text-blue-800">🤖 AI Answer</h3>
+                        <button
+                          onClick={() => openFormattedResponse(searchResult.answer, 'Search Result')}
+                          className="text-sm bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700 transition-colors"
+                        >
+                          📄 View Formatted
+                        </button>
+                      </div>
                       <div className="text-blue-900 whitespace-pre-wrap">
                         {searchResult.answer}
                       </div>
@@ -508,6 +526,19 @@ export default function Home() {
                             : 'bg-gray-200 text-gray-800'
                         }`}
                       >
+                        <div className="flex justify-between items-start mb-1">
+                          <span className="text-xs opacity-75">
+                            {message.role === 'user' ? '👤' : '🤖'}
+                          </span>
+                          {message.role === 'assistant' && (
+                            <button
+                              onClick={() => openFormattedResponse(message.content, `Chat Response ${index + 1}`)}
+                              className="text-xs bg-gray-600 text-white px-2 py-1 rounded hover:bg-gray-700 transition-colors ml-2"
+                            >
+                              📄
+                            </button>
+                          )}
+                        </div>
                         <p className="whitespace-pre-wrap">{message.content}</p>
                         {message.sources && message.sources.length > 0 && (
                           <div className="mt-2 pt-2 border-t border-gray-300">
